@@ -33,7 +33,8 @@ tapers = @lift dpss_tapers(parse(Int, $(n_tb.stored_string)), nw, k, :tap)
 
 @memoize LRU(maxsize=100_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
         multispec((@view y[][idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
-function multitaper_spectrogram(i1, i2, n, noverlap=div(n, 2); fs=1, nw=4.0, k=6, tapers=tapers)
+function multitaper_spectrogram(i1, i2, n; fs=1, nw=4.0, k=6, tapers=tapers)
+    noverlap = div(n, 2)
     idxs = i1 : n-noverlap : i2+1-n+1
     mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
     Threads.@threads :greedy for (i,idx) in enumerate(idxs)
@@ -50,12 +51,17 @@ sl_time = IntervalSlider(fig[5,2], range=o_rtime)
 ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], sl_freq.interval)
 itime = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[1])) : x[2], sl_time.interval)
 
-mtspectrums = lift(y, n_tb.stored_string, to.active, cb_pval.checked, itime, fs, tapers) do y, n_str, to, pval, itime, fs, tapers
+iclip = lift(y, n_tb.stored_string, itime) do y, n_str, itime
+    n = parse(Int, n_str)
+    noverlap = div(n, 2)
+    i1 = 1 + itime[1] * (n - noverlap)
+    i2 = n + itime[end] * (n - noverlap)
+    (i1, i2)
+end
+
+mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip) do y, to, pval, fs, tapers, iclip
     if !to || pval
-        n = parse(Int, n_str)
-        i1 = 1 + itime[1] * (n - div(n,2))
-        i2 = n + itime[end] * (n - div(n,2))
-        multitaper_spectrogram(i1, i2, n; fs=fs, tapers=tapers)
+        multitaper_spectrogram(iclip..., n; fs=fs, tapers=tapers)
     else
         Vector{MTSpectrum}(undef, 0)
     end
@@ -103,20 +109,29 @@ hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
                     alpha=alpha_pval,
                     visible=cb_pval.checked)
 
+y_clip = @lift view(y[], $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2])
+
+ax1, li1 = lines(fig[6,2], y_clip)
+ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
+ax1.ylabel[] = "amplitude"
+on(yc->limits!(ax1, 1, length(yc), extrema(yc)...), y_clip)
+
 _cumpower(p,d) = dropdims(sum(p, dims=d), dims=d)
 
 cumpowers1 = @lift _cumpower($powers, 1)
 cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $freqs))
 
 ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs)
-ax2.xticklabelsvisible[]=ax2.yticklabelsvisible[]=false
+ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
+ax2.xlabel[] = "power"
 onany((f,cp)->limits!(ax2, extrema(cp)..., f[1], f[end]), freqs, cumpowers1)
 
 cumpowers2 = @lift _cumpower($powers, 2)
 times_cumpowers2 = @lift Point2f.(zip($times, $cumpowers2))
 
 ax3, li3 = lines(fig[2,2], times_cumpowers2)
-ax3.xticklabelsvisible[]=ax3.yticklabelsvisible[]=false
+ax3.xticklabelsvisible[] = ax3.yticklabelsvisible[] = false
+ax3.ylabel[] = "power"
 onany((t,cp)->limits!(ax3, t[1], t[end], extrema(cp)...), times, cumpowers2)
 
 colsize!(fig.layout, 2, Auto(8))

@@ -1,4 +1,4 @@
-using WAV, DSP, GLMakie, Multitaper
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache
 
 basepath = "/Volumes/karpova/TervoLab/data/Vocals/RatCity/cohort3/ch1"
 
@@ -30,11 +30,13 @@ Y = @lift spectrogram($y[1:250_000*10,1], parse(Int, $(n_tb.stored_string)); fs=
 
 tapers = @lift dpss_tapers(parse(Int, $(n_tb.stored_string)), nw, k, :tap)
 
-function multitaper_spectrogram(s, n=div(length(s), 8), noverlap=div(n, 2); fs=1, nw=4.0, k=6)
-    i0 = 1 : n-noverlap : length(s)-n+1
-    mtspectrum = Vector{MTSpectrum}(undef, length(i0))
-    Threads.@threads :greedy for (i,idx) in enumerate(i0)
-        mtspectrum[i] = multispec(s[idx:idx+n-1], NW=nw, K=k, dt=1/fs, dpVec=tapers, Ftest=true)
+@memoize LRU(maxsize=100_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
+        multispec((@view y[][idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
+function multitaper_spectrogram(i1, i2, n, noverlap=div(n, 2); fs=1, nw=4.0, k=6, tapers=tapers)
+    idxs = i1 : n-noverlap : i2+1-n+1
+    mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
+    Threads.@threads :greedy for (i,idx) in enumerate(idxs)
+        mtspectrum[i] = _multispec(idx, n, nw, k, 1/fs, tapers, true)
     end
     return mtspectrum
 end
@@ -47,12 +49,12 @@ sl_time = IntervalSlider(fig[5,2], range=o_rtime)
 ifreq = lift(x -> x[1] : x[2], sl_freq.interval)
 itime = lift(x -> x[1] : x[2], sl_time.interval)
 
-mtspectrums = lift(y, n_tb.stored_string, to.active, cb_pval.checked, itime, fs) do y, n_str, to, pval, itime, fs
+mtspectrums = lift(y, n_tb.stored_string, to.active, cb_pval.checked, itime, fs, tapers) do y, n_str, to, pval, itime, fs, tapers
     if !to || pval
         n = parse(Int, n_str)
         i1 = 1 + itime[1] * (n - div(n,2))
         i2 = n + itime[end] * (n - div(n,2))
-        multitaper_spectrogram(y[i1:i2,1], n; fs=fs)
+        multitaper_spectrogram(i1, i2, n; fs=fs, tapers=tapers)
     else
         Vector{MTSpectrum}(undef, 0)
     end

@@ -3,7 +3,6 @@ using WAV, DSP, GLMakie, Multitaper
 basepath = "/Volumes/karpova/TervoLab/data/Vocals/RatCity/cohort3/ch1"
 
 hz2khz = 1000
-hm_res = 1000
 fs_play = 48_000
 nw, k = 4.0, 6
 
@@ -40,47 +39,52 @@ function multitaper_spectrogram(s, n=div(length(s), 8), noverlap=div(n, 2); fs=1
     return mtspectrum
 end
 
-mtspectrums = @lift multitaper_spectrogram($y[1:250_000*10,1], parse(Int, $(n_tb.stored_string)); fs=$fs)
-
-Y_MT = lift(mtspectrums) do mts
-    p = hcat((x.S for x in mts)...)
-    f = mts[1].f
-    t = (1:length(mts)) * mts[1].params.dt
-    DSP.Periodograms.Spectrogram(p, f, t)
-end
-
-F = lift(mtspectrums) do mts
-    hcat((x.Fpval for x in mts)...)
-end
-
-o_rfreq = @lift 0 : 1/(length(freq($Y))-1) : 1
-o_rtime = @lift 0 : 1/(length(time($Y))-1) : 1
-
+o_rfreq = @lift 1 : length(freq($Y))
+o_rtime = @lift 1 : length(time($Y))
 sl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false)
 sl_time = IntervalSlider(fig[5,2], range=o_rtime)
 
-ifreq = lift(sl_freq.interval, Y) do sl_freq, Y
-    i0 = round(Int, 1 + sl_freq[1] * (length(freq(Y))-1))
-    i1 = round(Int, 1 + sl_freq[2] * (length(freq(Y))-1))
-    df = max(1, floor(Int, (i1-i0)/hm_res))
-    i0:df:i1
-end
-itime = lift(sl_time.interval, Y) do sl_time, Y
-    i0 = round(Int, 1 + sl_time[1] * (length(time(Y))-1))
-    i1 = round(Int, 1 + sl_time[2] * (length(time(Y))-1))
-    df = max(1, floor(Int, (i1-i0)/hm_res))
-    i0:df:i1
+ifreq = lift(x -> x[1] : x[2], sl_freq.interval)
+itime = lift(x -> x[1] : x[2], sl_time.interval)
+
+mtspectrums = lift(y, n_tb.stored_string, to.active, cb_pval.checked, itime, fs) do y, n_str, to, pval, itime, fs
+    if !to || pval
+        n = parse(Int, n_str)
+        i1 = 1 + itime[1] * (n - div(n,2))
+        i2 = n + itime[end] * (n - div(n,2))
+        multitaper_spectrogram(y[i1:i2,1], n; fs=fs)
+    else
+        Vector{MTSpectrum}(undef, 0)
+    end
 end
 
-hm_vis = @lift $(to.active) && $(cb_power.checked)
-hm_mt_vis = @lift !$(to.active) && $(cb_power.checked)
+Y_MT = lift(mtspectrums, to.active) do mts, to
+    if !to
+        p = hcat((x.S for x in mts)...)
+        f = mts[1].f
+        t = (1:length(mts)) * mts[1].params.dt
+        DSP.Periodograms.Spectrogram(p, f, t)
+    else
+        DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.)
+    end
+end
+
+F = lift(mtspectrums, cb_pval.checked) do mts, pval
+    if pval
+        hcat((x.Fpval for x in mts)...)
+    else
+        Matrix{Float64}(undef, 0, 0)
+    end
+end
+
 alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
 alpha_pval = @lift $(cb_pval.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
-powers = @lift 20*log10.(power($Y)'[$itime,$ifreq])
+powers = @lift 20*log10.($(to.active) ? power($Y)'[$itime,$ifreq] :
+                                        power($Y_MT)'[1:$itime.step:end, $ifreq])
 freqs = @lift freq($Y)[$ifreq] ./ hz2khz
 times = @lift time($Y)[$itime]
-ax,hm = heatmap(fig[3:4,2], times, freqs, powers; alpha=alpha_power, visible=hm_vis)
+ax,hm = heatmap(fig[3:4,2], times, freqs, powers; alpha=alpha_power, visible=cb_power.checked)
 
 ax.xlabel[] = "time (s)"
 ax.ylabel[] = "frequency (kHz)"
@@ -88,11 +92,10 @@ onany(freqs, times) do f,t
     limits!(ax, t[1], t[end], f[1], f[end])
 end
 
-powers_mt = @lift 20*log10.(power($Y_MT)'[$itime,$ifreq])
-hm_mt = heatmap!(times, freqs, powers_mt; alpha=alpha_power, visible=hm_mt_vis)
-
-pvals = @lift ($F)'[$itime,$ifreq]
-hm_pvals = heatmap!(times, freqs, pvals;
+freqs_mt = @lift $(cb_pval.checked) ? $freqs : Vector{Float32}(undef, 1)
+times_mt = @lift $(cb_pval.checked) ? $times : Vector{Float32}(undef, 1)
+pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{Float64}(undef, 1, 1)
+hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
                     colormap=:grays, colorrange=(0.01,1), lowclip=(:fuchsia, 1),
                     alpha=alpha_pval,
                     visible=cb_pval.checked)

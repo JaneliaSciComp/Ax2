@@ -105,19 +105,17 @@ hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
 
 _cumpower(p,d) = dropdims(sum(p, dims=d), dims=d)
 
-cumpowers1 = Observable(_cumpower(powers[],1))
-on(p->cumpowers1.val=_cumpower(p,1), powers)
-on(_->notify(cumpowers1), sl_time.interval)
+cumpowers1 = @lift _cumpower($powers, 1)
+cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $freqs))
 
-ax2, li = lines(fig[3:4,3], cumpowers1, freqs)
+ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs)
 ax2.xticklabelsvisible[]=ax2.yticklabelsvisible[]=false
 onany((f,cp)->limits!(ax2, extrema(cp)..., f[1], f[end]), freqs, cumpowers1)
 
-cumpowers2 = Observable(_cumpower(powers[],2))
-on(p->cumpowers2.val=_cumpower(p,2), powers)
-on(_->notify(cumpowers2), sl_freq.interval)
+cumpowers2 = @lift _cumpower($powers, 2)
+times_cumpowers2 = @lift Point2f.(zip($times, $cumpowers2))
 
-ax3, li = lines(fig[2,2], times, cumpowers2)
+ax3, li3 = lines(fig[2,2], times_cumpowers2)
 ax3.xticklabelsvisible[]=ax3.yticklabelsvisible[]=false
 onany((t,cp)->limits!(ax3, t[1], t[end], extrema(cp)...), times, cumpowers2)
 

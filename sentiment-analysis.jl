@@ -5,6 +5,7 @@ basepath = "/Volumes/karpova/TervoLab/data/Vocals/RatCity/cohort3/ch1"
 hz2khz = 1000
 fs_play = 48_000
 nw, k = 4.0, 6
+display_size = (3000,2000)
 
 fig = Figure()
 
@@ -25,7 +26,7 @@ Label(gl[4,1,Top()], "nfft")
 n_tb = Textbox(gl[4,1], stored_string="512", validator=s->all(isdigit(c) for c in s))
 play_bt = Button(gl[5,1], label="play")
 
-Y = @lift spectrogram($y[1:250_000*10,1], parse(Int, $(n_tb.stored_string)); fs=$fs, window=hanning)
+Y = @lift spectrogram($y[:,1], parse(Int, $(n_tb.stored_string)); fs=$fs, window=hanning)
 
 
 tapers = @lift dpss_tapers(parse(Int, $(n_tb.stored_string)), nw, k, :tap)
@@ -46,8 +47,8 @@ o_rtime = @lift 1 : length(time($Y))
 sl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false)
 sl_time = IntervalSlider(fig[5,2], range=o_rtime)
 
-ifreq = lift(x -> x[1] : x[2], sl_freq.interval)
-itime = lift(x -> x[1] : x[2], sl_time.interval)
+ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], sl_freq.interval)
+itime = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[1])) : x[2], sl_time.interval)
 
 mtspectrums = lift(y, n_tb.stored_string, to.active, cb_pval.checked, itime, fs, tapers) do y, n_str, to, pval, itime, fs, tapers
     if !to || pval

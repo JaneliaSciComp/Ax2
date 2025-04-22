@@ -24,7 +24,7 @@ Label(gl[3,1, Right()], "Hanning\nSlepian")
 to = Toggle(gl[3,1], active=true, orientation=:vertical)
 Label(gl[4,1,Top()], "nfft")
 n_tb = Textbox(gl[4,1], stored_string="512", validator=s->all(isdigit(c) for c in s))
-play_bt = Button(gl[5,1], label="play")
+bt_play = Button(gl[5,1], label="play")
 
 Y = @lift spectrogram($y[:,1], parse(Int, $(n_tb.stored_string)); fs=$fs, window=hanning)
 
@@ -124,13 +124,13 @@ colsize!(fig.layout, 3, Auto(1))
 rowsize!(fig.layout, 2, Auto(1))
 rowsize!(fig.layout, 3, Auto(4))
 
-onany(play_bt.clicks, y, fs) do _, y, fs
+onany(bt_play.clicks) do _
     nfft = parse(Int, n_tb.stored_string[])
     overlap = nfft / 2
     t0 = round(Int, itime[][1] * overlap)
     t1 = round(Int, (1+itime[][end]) * overlap)
-    yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs), Butterworth(4)), y[t0:t1,1])
-    ydown = resample(yfilt, fs_play/fs)
+    yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)), y[][t0:t1,1])
+    ydown = resample(yfilt, fs_play/fs[])
     wavplay(ydown, fs_play)
 end
 

@@ -6,6 +6,7 @@ hz2khz = 1000
 fs_play = 48_000
 nw, k = 4.0, 6
 display_size = (3000,2000)
+max_width_sec = 60
 
 fig = Figure()
 
@@ -23,13 +24,14 @@ cb_power = Checkbox(gl[2,1], checked = true)
 Label(gl[3,1, Right()], "Hanning\nSlepian")
 to = Toggle(gl[3,1], active=true, orientation=:vertical)
 Label(gl[4,1,Top()], "nfft")
-n_tb = Textbox(gl[4,1], stored_string="512", validator=s->all(isdigit(c) for c in s))
+tb_nfft = Textbox(gl[4,1], stored_string="512", validator=s->all(isdigit(c) for c in s))
 bt_play = Button(gl[5,1], label="play")
 
-Y = @lift spectrogram($y[:,1], parse(Int, $(n_tb.stored_string)); fs=$fs, window=hanning)
+nfft = @lift parse(Int, $(tb_nfft.stored_string))
 
+Y = @lift spectrogram($y[:,1], $nfft; fs=$fs, window=hanning)
 
-tapers = @lift dpss_tapers(parse(Int, $(n_tb.stored_string)), nw, k, :tap)
+tapers = @lift dpss_tapers($nfft, nw, k, :tap)
 
 @memoize LRU(maxsize=100_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
         multispec((@view y[][idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
@@ -46,22 +48,25 @@ end
 o_rfreq = @lift 1 : length(freq($Y))
 o_rtime = @lift 1 : length(time($Y))
 sl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false)
-sl_time = IntervalSlider(fig[5,2], range=o_rtime)
+Label(fig[5,2, Left()], "center")
+sl_time_center = Slider(fig[5,2], range=o_rtime)
+Label(fig[6,2, Left()], "width")
+sl_time_width = Slider(fig[6,2], range=1:1+Int(cld(max_width_sec*fs[], nfft[]/2)))
 
 ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], sl_freq.interval)
-itime = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[1])) : x[2], sl_time.interval)
+itime = lift((c,w,Y) -> max(1,c-w) : max(1, fld(w, display_size[1])) : min(length(time(Y)),c+w),
+             sl_time_center.value, sl_time_width.value, Y)
 
-iclip = lift(y, n_tb.stored_string, itime) do y, n_str, itime
-    n = parse(Int, n_str)
-    noverlap = div(n, 2)
-    i1 = 1 + itime[1] * (n - noverlap)
-    i2 = n + itime[end] * (n - noverlap)
+iclip = lift(y, nfft, itime) do y, nfft, itime
+    noverlap = div(nfft, 2)
+    i1 = 1 + itime[1] * (nfft - noverlap)
+    i2 = nfft + itime[end] * (nfft - noverlap)
     (i1, i2)
 end
 
-mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip) do y, to, pval, fs, tapers, iclip
+mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip, nfft) do y, to, pval, fs, tapers, iclip, nfft
     if !to || pval
-        multitaper_spectrogram(iclip..., n; fs=fs, tapers=tapers)
+        multitaper_spectrogram(iclip..., nfft; fs=fs, tapers=tapers)
     else
         Vector{MTSpectrum}(undef, 0)
     end
@@ -111,7 +116,7 @@ hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
 
 y_clip = @lift view(y[], $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2])
 
-ax1, li1 = lines(fig[6,2], y_clip)
+ax1, li1 = lines(fig[7,2], y_clip)
 ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
 ax1.ylabel[] = "amplitude"
 on(yc->limits!(ax1, 1, length(yc), extrema(yc)...), y_clip)
@@ -140,8 +145,7 @@ rowsize!(fig.layout, 2, Auto(1))
 rowsize!(fig.layout, 3, Auto(4))
 
 onany(bt_play.clicks) do _
-    nfft = parse(Int, n_tb.stored_string[])
-    overlap = nfft / 2
+    overlap = nfft[] / 2
     t0 = round(Int, itime[][1] * overlap)
     t1 = round(Int, (1+itime[][end]) * overlap)
     yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)), y[][t0:t1,1])

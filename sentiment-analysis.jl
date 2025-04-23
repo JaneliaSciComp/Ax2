@@ -19,14 +19,17 @@ fs = @lift $(y_fs_)[2]
 gl = GridLayout(fig[2:4,4])
 Label(gl[1,1, Top()], "p-val")
 cb_pval = Checkbox(gl[1,1], checked = false)
-Label(gl[2,1, Top()], "power")
-cb_power = Checkbox(gl[2,1], checked = true)
-Label(gl[3,1, Right()], "Hanning\nSlepian")
-to = Toggle(gl[3,1], active=true, orientation=:vertical)
-Label(gl[4,1,Top()], "nfft")
-tb_nfft = Textbox(gl[4,1], stored_string="512", validator=s->all(isdigit(c) for c in s))
-bt_play = Button(gl[5,1], label="play")
+Label(gl[2,1,Top()], "threshold")
+tb_thresh = Textbox(gl[2,1], stored_string="0.01", validator=Float64)
+Label(gl[3,1, Top()], "power")
+cb_power = Checkbox(gl[3,1], checked = true)
+Label(gl[4,1, Right()], "Hanning\nSlepian")
+to = Toggle(gl[4,1], active=true, orientation=:vertical)
+Label(gl[5,1,Top()], "nfft")
+tb_nfft = Textbox(gl[5,1], stored_string="512", validator=Int)
+bt_play = Button(gl[6,1], label="play")
 
+thresh = @lift parse(Float64, $(tb_thresh.stored_string))
 nfft = @lift parse(Int, $(tb_nfft.stored_string))
 
 Y = @lift spectrogram($y[:,1], $nfft; fs=$fs, window=hanning)
@@ -109,8 +112,9 @@ end
 freqs_mt = @lift $(cb_pval.checked) ? $freqs : Vector{Float32}(undef, 1)
 times_mt = @lift $(cb_pval.checked) ? $times : Vector{Float32}(undef, 1)
 pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{Float64}(undef, 1, 1)
+cr = @lift ($thresh,1)
 hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
-                    colormap=:grays, colorrange=(0.01,1), lowclip=(:fuchsia, 1),
+                    colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
                     alpha=alpha_pval,
                     visible=cb_pval.checked)
 

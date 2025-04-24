@@ -157,8 +157,8 @@ function gui(datapath)
         limits!(ax, t[1], t[end], f[1], f[end])
     end
 
-    freqs_mt = @lift $(cb_pval.checked) ? $freqs : Vector{Float32}(undef, 1)
-    times_mt = @lift $(cb_pval.checked) ? $times : Vector{Float32}(undef, 1)
+    freqs_mt = @lift $(cb_pval.checked) ? collect($freqs) : Vector{Float64}(undef, 1)
+    times_mt = @lift $(cb_pval.checked) ? collect($times) : Vector{Float64}(undef, 1)
     pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{Float64}(undef, 1, 1)
     cr = @lift ($thresh,1)
     hm_pvals = heatmap!(times_mt, freqs_mt, pvals;

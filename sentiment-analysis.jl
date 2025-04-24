@@ -51,10 +51,26 @@ end
 o_rfreq = @lift 1 : length(freq($Y))
 o_rtime = @lift 1 : length(time($Y))
 sl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false)
+gl2 = GridLayout(fig[5,3])
+bt_left_center = Button(gl2[1,1], label="<")
+bt_right_center = Button(gl2[1,2], label=">")
 Label(fig[5,2, Left()], "center")
 sl_time_center = Slider(fig[5,2], range=o_rtime)
+gl3 = GridLayout(fig[6,3])
+bt_left_width = Button(gl3[1,1], label="<")
+bt_right_width = Button(gl3[1,2], label=">")
 Label(fig[6,2, Left()], "width")
-sl_time_width = Slider(fig[6,2], range=1:1+Int(cld(max_width_sec*fs[], nfft[]/2)))
+maxvalue = Int(cld(max_width_sec*fs[], nfft[]/2))
+sl_time_width = Slider(fig[6,2], range=1:maxvalue, startvalue=maxvalue)
+
+on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10),
+   bt_left_center.clicks)
+on(_->set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 10),
+   bt_right_center.clicks)
+on(_->set_close_to!(sl_time_width, sl_time_width.value[]*0.9),
+   bt_left_width.clicks)
+on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.1),
+   bt_right_width.clicks)
 
 ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], sl_freq.interval)
 itime = lift((c,w,Y) -> max(1,c-w) : max(1, fld(w, display_size[1])) : min(length(time(Y)),c+w),

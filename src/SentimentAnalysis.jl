@@ -8,7 +8,7 @@ function gui(datapath)
     pref_defaults = (;
         figsize = (640,450),
         isl_freq = missing,
-        sl_time_center = 1,
+        sl_time_center = 0,
         sl_time_width = missing,
         m = missing,
         cb_pval = false,
@@ -61,6 +61,7 @@ function gui(datapath)
 
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
     nfft = @lift parse(Int, $(tb_nfft.stored_string))
+    noverlap = @lift div($nfft, 2)
 
     Y = @lift spectrogram($y[:,1], $nfft; fs=$fs, window=hanning)
 
@@ -78,21 +79,20 @@ function gui(datapath)
         return mtspectrum
     end
 
-    o_rfreq = @lift 1 : length(freq($Y))
-    o_rtime = @lift 1 : length(time($Y))
-    isl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false,
-                             startvalues = coalesce(isl_freq_pref, tuple(o_rfreq[][1], o_rfreq[][end])))
+    isl_freq = IntervalSlider(fig[3:4,1], range=0:0.01:1, horizontal=false,
+                              startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
     gl2 = GridLayout(fig[5,3])
     bt_left_center = Button(gl2[1,1], label="<")
     bt_right_center = Button(gl2[1,2], label=">")
     Label(fig[5,2, Left()], "center")
-    sl_time_center = Slider(fig[5,2], range=o_rtime, startvalue=sl_time_center_pref)
+    step = (nfft[]-noverlap[]) / length(y[])
+    sl_time_center = Slider(fig[5,2], range=0:step:1, startvalue=sl_time_center_pref)
     gl3 = GridLayout(fig[6,3])
     bt_left_width = Button(gl3[1,1], label="<")
     bt_right_width = Button(gl3[1,2], label=">")
     Label(fig[6,2, Left()], "width")
-    maxvalue = Int(cld(max_width_sec*fs[], nfft[]/2))
-    sl_time_width = Slider(fig[6,2], range=1:maxvalue,
+    maxvalue = max_width_sec * fs[] / length(y[])
+    sl_time_width = Slider(fig[6,2], range=0:step:maxvalue,
                            startvalue = coalesce(sl_time_width_pref, maxvalue))
 
     on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10),
@@ -104,15 +104,25 @@ function gui(datapath)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.1),
        bt_right_width.clicks)
 
-    ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], isl_freq.interval)
-    itime = lift((c,w,Y) -> max(1,c-w) : max(1, fld(w, display_size[1])) : min(length(time(Y)),c+w),
-                 sl_time_center.value, sl_time_width.value, Y)
+    # indices into Y
+    ifreq = lift(isl_freq.interval, Y) do x, Y
+        start = 1 + round(Int, (length(freq(Y))-1) * x[1])
+        stop = 1 + round(Int, (length(freq(Y))-1) * x[2])
+        step = max(1, fld(stop-start+1, display_size[2]))
+        start:step:stop
+    end
+    itime = lift(sl_time_center.value, sl_time_width.value, Y) do c, w, Y
+        frac2fft(x) = round(Int, x*length(time(Y)))
+        start = max(1, frac2fft(c-w))
+        step = max(1, Int(fld(frac2fft(w), display_size[1])))
+        stop = min(length(time(Y)), frac2fft(c+w))
+        start:step:stop
+    end
 
-    iclip = lift(y, nfft, itime) do y, nfft, itime
-        noverlap = div(nfft, 2)
-        i1 = 1 + itime[1] * (nfft - noverlap)
-        i2 = nfft + itime[end] * (nfft - noverlap)
-        (i1, i2)
+    # indices into y
+    iclip = lift(sl_time_center.value, sl_time_width.value, y) do c, w, y
+        frac2tic(x) = round(Int, x*length(y))
+        (max(1, frac2tic(c-w)), min(length(y), frac2tic(c+w)))
     end
 
     mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip, nfft) do y, to, pval, fs, tapers, iclip, nfft
@@ -135,11 +145,7 @@ function gui(datapath)
     end
 
     F = lift(mtspectrums, cb_pval.checked) do mts, pval
-        if pval
-            hcat((x.Fpval for x in mts)...)
-        else
-            Matrix{Float64}(undef, 0, 0)
-        end
+        pval ?  hcat((x.Fpval for x in mts)...) : Matrix{Float64}(undef, 0, 0)
     end
 
     alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
@@ -197,10 +203,8 @@ function gui(datapath)
     rowsize!(fig.layout, 3, Auto(4))
 
     onany(bt_play.clicks) do _
-        overlap = nfft[] / 2
-        t0 = round(Int, itime[][1] * overlap)
-        t1 = round(Int, (1+itime[][end]) * overlap)
-        yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)), y[][t0:t1,1])
+        yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
+                         y[][iclip[][1]:iclip[][2], 1])
         ydown = resample(yfilt, fs_play/fs[])
         wavplay(ydown, fs_play)
     end

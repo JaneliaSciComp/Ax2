@@ -1,6 +1,6 @@
 module SentimentAnalysis
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter
 
 export gui
 
@@ -72,7 +72,7 @@ function gui(datapath)
         noverlap = div(n, 2)
         idxs = i1 : n-noverlap : i2+1-n+1
         mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
-        Threads.@threads :greedy for (i,idx) in enumerate(idxs)
+        @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
             mtspectrum[i] = _multispec(idx, n, nw, k, 1/fs, tapers, true)
         end
         return mtspectrum

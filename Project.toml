@@ -10,6 +10,7 @@ LRUCache = "8ac3fa9e-de4c-5943-b1dc-09c6b5f20637"
 Memoize = "c03570c3-d221-55d1-a50c-7939bbd78826"
 Multitaper = "a81958ac-9ec9-4086-814d-3ae87249a5e8"
 Preferences = "21216c6a-2e73-6563-6e65-726566657250"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 WAV = "8149f6b0-98f6-5db9-b78f-408fbbb8ef88"
 
 [compat]
@@ -19,4 +20,5 @@ LRUCache = "1.6.2"
 Memoize = "0.4.4"
 Multitaper = "1.2.0"
 Preferences = "1.4.3"
+ProgressMeter = "1.10.4"
 WAV = "1.2.0"

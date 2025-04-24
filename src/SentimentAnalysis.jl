@@ -1,19 +1,46 @@
 module SentimentAnalysis
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, ProgressMeter
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences
 
 export gui
 
 function gui(datapath)
+    pref_defaults = (;
+        figsize = (640,450),
+        isl_freq = missing,
+        sl_time_center = 1,
+        sl_time_width = missing,
+        m = missing,
+        cb_pval = false,
+        tb_thresh = "0.01",
+        cb_power = true,
+        to = true,
+        tb_nfft = "512",
+        )
+
+    _figsize_pref = @load_preference("figsize", pref_defaults.figsize)
+    figsize_pref = typeof(_figsize_pref)<:Tuple ? _figsize_pref : eval(Meta.parse(_figsize_pref))
+    _isl_freq_pref = @load_preference("isl_freq", pref_defaults.isl_freq)
+    isl_freq_pref = ismissing(_isl_freq_pref) ? _isl_freq_pref : eval(Meta.parse(_isl_freq_pref))
+    sl_time_center_pref = @load_preference("sl_time_center", pref_defaults.sl_time_center)
+    sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
+    m_pref = @load_preference("m", pref_defaults.m)
+    cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
+    tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
+    cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
+    to_pref = @load_preference("to", pref_defaults.to)
+    tb_nfft_pref = @load_preference("tb_nfft", pref_defaults.tb_nfft)
+
     hz2khz = 1000
     fs_play = 48_000
     nw, k = 4.0, 6
     display_size = (3000,2000)
     max_width_sec = 60
 
-    fig = Figure()
+    fig = Figure(size=figsize_pref)
 
-    m = Menu(fig[1,1:3], options=filter(endswith(".wav"), readdir(datapath)))
+    wavfiles = filter(endswith(".wav"), readdir(datapath))
+    m = Menu(fig[1,1:3], options=wavfiles, default=coalesce(m_pref, wavfiles[1]))
 
     y_fs_ = @lift wavread(joinpath(datapath, $(m.selection)))
     y = @lift $(y_fs_)[1]
@@ -21,15 +48,15 @@ function gui(datapath)
 
     gl = GridLayout(fig[2:4,4])
     Label(gl[1,1, Top()], "p-val")
-    cb_pval = Checkbox(gl[1,1], checked = false)
+    cb_pval = Checkbox(gl[1,1], checked = cb_pval_pref)
     Label(gl[2,1,Top()], "threshold")
-    tb_thresh = Textbox(gl[2,1], stored_string="0.01", validator=Float64)
+    tb_thresh = Textbox(gl[2,1], stored_string=tb_thresh_pref, validator=Float64)
     Label(gl[3,1, Top()], "power")
-    cb_power = Checkbox(gl[3,1], checked = true)
+    cb_power = Checkbox(gl[3,1], checked = cb_power_pref)
     Label(gl[4,1, Right()], "Hanning\nSlepian")
-    to = Toggle(gl[4,1], active=true, orientation=:vertical)
+    to = Toggle(gl[4,1], active=to_pref, orientation=:vertical)
     Label(gl[5,1,Top()], "nfft")
-    tb_nfft = Textbox(gl[5,1], stored_string="512", validator=Int)
+    tb_nfft = Textbox(gl[5,1], stored_string=tb_nfft_pref, validator=Int)
     bt_play = Button(gl[6,1], label="play")
 
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
@@ -53,18 +80,20 @@ function gui(datapath)
 
     o_rfreq = @lift 1 : length(freq($Y))
     o_rtime = @lift 1 : length(time($Y))
-    sl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false)
+    isl_freq = IntervalSlider(fig[3:4,1], range=o_rfreq, horizontal=false,
+                             startvalues = coalesce(isl_freq_pref, tuple(o_rfreq[][1], o_rfreq[][end])))
     gl2 = GridLayout(fig[5,3])
     bt_left_center = Button(gl2[1,1], label="<")
     bt_right_center = Button(gl2[1,2], label=">")
     Label(fig[5,2, Left()], "center")
-    sl_time_center = Slider(fig[5,2], range=o_rtime, startvalue=1)
+    sl_time_center = Slider(fig[5,2], range=o_rtime, startvalue=sl_time_center_pref)
     gl3 = GridLayout(fig[6,3])
     bt_left_width = Button(gl3[1,1], label="<")
     bt_right_width = Button(gl3[1,2], label=">")
     Label(fig[6,2, Left()], "width")
     maxvalue = Int(cld(max_width_sec*fs[], nfft[]/2))
-    sl_time_width = Slider(fig[6,2], range=1:maxvalue, startvalue=maxvalue)
+    sl_time_width = Slider(fig[6,2], range=1:maxvalue,
+                           startvalue = coalesce(sl_time_width_pref, maxvalue))
 
     on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10),
        bt_left_center.clicks)
@@ -75,7 +104,7 @@ function gui(datapath)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.1),
        bt_right_width.clicks)
 
-    ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], sl_freq.interval)
+    ifreq = lift(x -> x[1] : max(1, fld(x[2]-x[1], display_size[2])) : x[2], isl_freq.interval)
     itime = lift((c,w,Y) -> max(1,c-w) : max(1, fld(w, display_size[1])) : min(length(time(Y)),c+w),
                  sl_time_center.value, sl_time_width.value, Y)
 
@@ -175,6 +204,17 @@ function gui(datapath)
         ydown = resample(yfilt, fs_play/fs[])
         wavplay(ydown, fs_play)
     end
+
+    on(x->@set_preferences!("figsize"=>string(tuple(x.widths...))), fig.scene.viewport)
+    on(x->@set_preferences!("isl_freq"=>string(x)), isl_freq.interval)
+    on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
+    on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
+    on(x->@set_preferences!("m"=>x), m.selection)
+    on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
+    on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
+    on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
+    on(x->@set_preferences!("to"=>x), to.active)
+    on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
 
     notify(freqs)
     display(fig)

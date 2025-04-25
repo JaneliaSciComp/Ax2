@@ -153,24 +153,26 @@ function gui(datapath)
 
     powers = @lift 20*log10.($(to.active) ? power($Y)'[$itime,$ifreq] :
                                             power($Y_MT)'[1:$itime.step:end, $ifreq])
-    freqs = @lift freq($Y)[$ifreq] ./ hz2khz
-    times = @lift time($Y)[$itime]
-    ax,hm = heatmap(fig[3:4,2], times, freqs, powers; alpha=alpha_power, visible=cb_power.checked)
+    freqs = @lift tuple(freq($Y)[$ifreq][[1,end]] ./ hz2khz...)
+    times = @lift tuple(time($Y)[$itime][[1,end]]...)
+    ax,hm = image(fig[3:4,2], times, freqs, powers;
+                  interpolate=false, colormap=:viridis, alpha=alpha_power, visible=cb_power.checked)
 
     ax.xlabel[] = "time (s)"
     ax.ylabel[] = "frequency (kHz)"
     onany(freqs, times) do f,t
-        limits!(ax, t[1], t[end], f[1], f[end])
+        limits!(ax, t..., f...)
     end
 
-    freqs_mt = @lift $(cb_pval.checked) ? collect($freqs) : Vector{Float64}(undef, 1)
-    times_mt = @lift $(cb_pval.checked) ? collect($times) : Vector{Float64}(undef, 1)
+    freqs_mt = @lift $(cb_pval.checked) ? $freqs : tuple(0.,0.)
+    times_mt = @lift $(cb_pval.checked) ? $times : tuple(0.,0.)
     pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{Float64}(undef, 1, 1)
     cr = @lift ($thresh,1)
-    hm_pvals = heatmap!(times_mt, freqs_mt, pvals;
-                        colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
-                        alpha=alpha_pval,
-                        visible=cb_pval.checked)
+    hm_pvals = image!(times_mt, freqs_mt, pvals;
+                      interpolate=false,
+                      colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
+                      alpha=alpha_pval,
+                      visible=cb_pval.checked)
 
     y_clip = @lift view(y[], $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2])
 
@@ -182,20 +184,19 @@ function gui(datapath)
     _cumpower(p,d) = dropdims(sum(p, dims=d), dims=d)
 
     cumpowers1 = @lift _cumpower($powers, 1)
-    cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $freqs))
+    cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, 1:length($cumpowers1)))
 
     ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs)
     ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
     ax2.xlabel[] = "power"
-    onany((f,cp)->limits!(ax2, extrema(cp)..., f[1], f[end]), freqs, cumpowers1)
+    onany(cp->limits!(ax2, extrema(cp)..., 1, length(cp)), cumpowers1)
 
     cumpowers2 = @lift _cumpower($powers, 2)
-    times_cumpowers2 = @lift Point2f.(zip($times, $cumpowers2))
 
-    ax3, li3 = lines(fig[2,2], times_cumpowers2)
+    ax3, li3 = lines(fig[2,2], cumpowers2)
     ax3.xticklabelsvisible[] = ax3.yticklabelsvisible[] = false
     ax3.ylabel[] = "power"
-    onany((t,cp)->limits!(ax3, t[1], t[end], extrema(cp)...), times, cumpowers2)
+    onany(cp->limits!(ax3, 1, length(cp), extrema(cp)...), cumpowers2)
 
     colsize!(fig.layout, 2, Auto(8))
     colsize!(fig.layout, 3, Auto(1))
@@ -221,6 +222,9 @@ function gui(datapath)
     on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
 
     notify(freqs)
+    notify(cumpowers1)
+    notify(cumpowers2)
+    notify(y_clip)
     display(fig)
 end
 

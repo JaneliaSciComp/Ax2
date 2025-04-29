@@ -1,6 +1,6 @@
 module SentimentAnalysis
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore
 
 export gui
 
@@ -56,16 +56,50 @@ function gui(datapath)
     Label(gl[4,1, Right()], "Hanning\nSlepian")
     to = Toggle(gl[4,1], active=to_pref, orientation=:vertical)
     Label(gl[5,1,Top()], "nfft")
-    tb_nfft = Textbox(gl[5,1], stored_string=tb_nfft_pref, validator=Int)
+    tb_nfft = Textbox(gl[5,1], stored_string=tb_nfft_pref,
+                      validator = s -> all(isdigit(c) || c==',' for c in s))
     bt_play = Button(gl[6,1], label="play")
 
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
-    nfft = @lift parse(Int, $(tb_nfft.stored_string))
-    noverlap = @lift div($nfft, 2)
+    nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
+    noverlaps = @lift div.($nffts, 2)
 
-    Y = @lift spectrogram($y[:,1], $nfft; fs=$fs, window=hanning)
+    function overlay(Ys, f)
+        ntime, nfreq = size.(f.(Ys),2), size.(f.(Ys),1)
+        mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
+        minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
+        Y_scratch = zeros(Float32, 4, minfreq, mintime)
+        for (icolor, Yi) in enumerate(Ys)
+            sz = size(f(Yi))
+            scale = round.(Int, (minfreq, mintime) ./ sz)
+            for f0 in 1:scale[1], t0 in 1:scale[2]
+                fdelta = sz[1] - length(f0:scale[1]:minfreq)
+                tdelta = sz[2] - length(t0:scale[2]:mintime)
+                Y_scratch[icolor,
+                  f0 : scale[1] : end,
+                  t0 : scale[2] : end] .= f(Yi)[1:end-fdelta, 1:end-tdelta]
+            end
+        end
+        q = quantile(Y_scratch, [0.01,0.99])
+        f = scaleminmax(N0f8, q...)
+        Y_scaled = f.(Y_scratch)
+        Y_scaled[4,:,:] .= 1
+        if length(Ys) == 2
+            Y_scaled[3,:,:] .= Y_scaled[2,:,:]
+            Y_scaled[2,:,:] .= Y_scaled[1,:,:]
+        elseif length(Ys) == 1
+            Y_scaled[2,:,:] .= Y_scaled[3,:,:] .= Y_scaled[1,:,:]
+        end
+        dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+    end
 
-    tapers = @lift dpss_tapers($nfft, nw, k, :tap)
+    Ys = @lift spectrogram.(Ref($y[:,1]), $nffts; fs=$fs, window=hanning)
+    Y = @lift overlay($Ys, x->20*log10.(power(x)))
+
+    Y_freq = @lift freq($Ys[argmax($nffts)])
+    Y_time = @lift time($Ys[argmin($nffts)])
+
+    tapers = @lift dpss_tapers.($nffts, nw, k, :tap)
 
     @memoize LRU(maxsize=100_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
             multispec((@view y[][idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
@@ -85,7 +119,7 @@ function gui(datapath)
     bt_left_center = Button(gl2[1,1], label="<")
     bt_right_center = Button(gl2[1,2], label=">")
     Label(fig[5,2, Left()], "center")
-    step = (nfft[]-noverlap[]) / length(y[])
+    step = (nffts[][1]-noverlaps[][1]) / length(y[])
     sl_time_center = Slider(fig[5,2], range=0:step:1, startvalue=sl_time_center_pref)
     gl3 = GridLayout(fig[6,3])
     bt_left_width = Button(gl3[1,1], label="<")
@@ -105,17 +139,17 @@ function gui(datapath)
        bt_right_width.clicks)
 
     # indices into Y
-    ifreq = lift(isl_freq.interval, Y) do x, Y
-        start = 1 + round(Int, (length(freq(Y))-1) * x[1])
-        stop = 1 + round(Int, (length(freq(Y))-1) * x[2])
+    ifreq = lift(isl_freq.interval, Y_freq) do x, Y_freq
+        start = 1 + round(Int, (length(Y_freq)-1) * x[1])
+        stop = 1 + round(Int, (length(Y_freq)-1) * x[2])
         step = max(1, fld(stop-start+1, display_size[2]))
         start:step:stop
     end
-    itime = lift(sl_time_center.value, sl_time_width.value, Y) do c, w, Y
-        frac2fft(x) = round(Int, x*length(time(Y)))
+    itime = lift(sl_time_center.value, sl_time_width.value, Y_time) do c, w, Y_time
+        frac2fft(x) = round(Int, x*length(Y_time))
         start = max(1, frac2fft(c-w))
         step = max(1, Int(fld(frac2fft(w), display_size[1])))
-        stop = min(length(time(Y)), frac2fft(c+w))
+        stop = min(length(Y_time), frac2fft(c+w))
         start:step:stop
     end
 
@@ -125,38 +159,65 @@ function gui(datapath)
         (max(1, frac2tic(c-w)), min(length(y), frac2tic(c+w)))
     end
 
-    mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip, nfft) do y, to, pval, fs, tapers, iclip, nfft
+    mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip, nffts) do y, to, pval, fs, tapers, iclip, nffts
         if !to || pval
-            multitaper_spectrogram(iclip..., nfft; fs=fs, tapers=tapers)
+            mtspectrums = []
+            for (nfft, taper) in zip(nffts, tapers)
+                push!(mtspectrums, multitaper_spectrogram(iclip..., nfft; fs=fs, tapers=taper))
+            end
+            return mtspectrums
         else
-            Vector{MTSpectrum}(undef, 0)
+            fill(Vector{MTSpectrum}(undef, 0), 0)
         end
     end
 
-    Y_MT = lift(mtspectrums, to.active) do mts, to
+    Y_MTs = lift(mtspectrums, to.active) do mts, to
         if !to
-            p = hcat((x.S for x in mts)...)
-            f = mts[1].f
-            t = (1:length(mts)) * mts[1].params.dt
-            DSP.Periodograms.Spectrogram(p, f, t)
+            Y_MTs = []
+            for mt in mts
+                p = hcat((x.S for x in mt)...)
+                f = mt[1].f
+                t = (1:length(mt)) * mt[1].params.dt
+                push!(Y_MTs, DSP.Periodograms.Spectrogram(p, f, t))
+            end
+            return Y_MTs
         else
-            DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.)
+            fill(DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
+    Y_MT = @lift $(to.active) ? Matrix{RGB{N0f8}}(undef, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)))
 
-    F = lift(mtspectrums, cb_pval.checked) do mts, pval
-        pval ?  hcat((x.Fpval for x in mts)...) : Matrix{Float64}(undef, 0, 0)
+    Fs = lift(mtspectrums, cb_pval.checked) do mts, pval
+        if pval
+            Fs = []
+            for mt in mts
+                push!(Fs, hcat((x.Fpval for x in mt)...))
+            end
+            return Fs
+        else
+            fill(Matrix{Float64}(undef, 0, 0), 0)
+        end
+    end
+    F = lift(Fs, cb_pval.checked) do Fs, pval
+        if pval
+            Y_colored = overlay(Fs, identity)
+            idx = findall(isequal(RGBA{N0f8}(0.0, 0.0, 0.0, 1)), Y_colored)
+            Y_colored[idx] .= RGBA{N0f8}(1.0, 0.0, 1.0, 1.0)
+            return Y_colored
+        else
+            Matrix{RGBA{N0f8}}(undef, 0, 0)
+        end
     end
 
     alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
     alpha_pval = @lift $(cb_pval.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
-    powers = @lift 20*log10.($(to.active) ? power($Y)'[$itime,$ifreq] :
-                                            power($Y_MT)'[1:$itime.step:end, $ifreq])
-    freqs = @lift tuple(freq($Y)[$ifreq][[1,end]] ./ hz2khz...)
-    times = @lift tuple(time($Y)[$itime][[1,end]]...)
+    powers = @lift $(to.active) ? $Y'[$itime,$ifreq] : $Y_MT'[1:$itime.step:end, $ifreq]
+
+    freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
+    times = @lift tuple($Y_time[$itime][[1,end]]...)
     ax,hm = image(fig[3:4,2], times, freqs, powers;
-                  interpolate=false, colormap=:viridis, alpha=alpha_power, visible=cb_power.checked)
+                  interpolate=false, alpha=alpha_power, visible=cb_power.checked)
 
     ax.xlabel[] = "time (s)"
     ax.ylabel[] = "frequency (kHz)"
@@ -166,7 +227,7 @@ function gui(datapath)
 
     freqs_mt = @lift $(cb_pval.checked) ? $freqs : tuple(0.,0.)
     times_mt = @lift $(cb_pval.checked) ? $times : tuple(0.,0.)
-    pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{Float64}(undef, 1, 1)
+    pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{RGBA{N0f8}}(undef, 1, 1)
     cr = @lift ($thresh,1)
     hm_pvals = image!(times_mt, freqs_mt, pvals;
                       interpolate=false,
@@ -181,7 +242,10 @@ function gui(datapath)
     ax1.ylabel[] = "amplitude"
     on(yc->limits!(ax1, 1, length(yc), extrema(yc)...), y_clip)
 
-    _cumpower(p,d) = dropdims(sum(p, dims=d), dims=d)
+    function _cumpower(p,d)
+        x = dropdims(sum(p, dims=d), dims=d)
+        @. red(x) + green(x) + blue(x)
+    end
 
     cumpowers1 = @lift _cumpower($powers, 1)
     cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, 1:length($cumpowers1)))

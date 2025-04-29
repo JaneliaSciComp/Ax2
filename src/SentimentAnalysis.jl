@@ -12,6 +12,7 @@ function gui(datapath)
         sl_time_width = missing,
         m = missing,
         cb_pval = false,
+        cb_sigonly = false,
         tb_thresh = "0.01",
         cb_power = true,
         to = true,
@@ -26,6 +27,7 @@ function gui(datapath)
     sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
     m_pref = @load_preference("m", pref_defaults.m)
     cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
+    cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
     tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
     to_pref = @load_preference("to", pref_defaults.to)
@@ -49,16 +51,19 @@ function gui(datapath)
     gl = GridLayout(fig[2:4,4])
     Label(gl[1,1, Top()], "p-val")
     cb_pval = Checkbox(gl[1,1], checked = cb_pval_pref)
-    Label(gl[2,1,Top()], "threshold")
-    tb_thresh = Textbox(gl[2,1], stored_string=tb_thresh_pref, validator=Float64)
-    Label(gl[3,1, Top()], "power")
-    cb_power = Checkbox(gl[3,1], checked = cb_power_pref)
-    Label(gl[4,1, Right()], "Hanning\nSlepian")
-    to = Toggle(gl[4,1], active=to_pref, orientation=:vertical)
-    Label(gl[5,1,Top()], "nfft")
-    tb_nfft = Textbox(gl[5,1], stored_string=tb_nfft_pref,
+    Label(gl[2,1, Top()], "sig. only")
+    cb_sigonly = Checkbox(gl[2,1], checked = cb_sigonly_pref)
+    Label(gl[3,1,Top()], "threshold")
+    tb_thresh = Textbox(gl[3,1], stored_string=tb_thresh_pref, validator=Float64)
+    Label(gl[4,1, Top()], "power")
+    cb_power = Checkbox(gl[4,1], checked = cb_power_pref)
+    Label(gl[5,1, Top()], "Hanning")
+    Label(gl[5,1, Bottom()], "Slepian")
+    to = Toggle(gl[5,1], active=to_pref, orientation=:vertical)
+    Label(gl[6,1,Top()], "nfft")
+    tb_nfft = Textbox(gl[6,1], stored_string=tb_nfft_pref,
                       validator = s -> all(isdigit(c) || c==',' for c in s))
-    bt_play = Button(gl[6,1], label="play")
+    bt_play = Button(gl[7,1], label="play")
 
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
@@ -198,10 +203,11 @@ function gui(datapath)
             fill(Matrix{Float64}(undef, 0, 0), 0)
         end
     end
-    F = lift(Fs, cb_pval.checked) do Fs, pval
+    F = lift(Fs, cb_pval.checked, cb_sigonly.checked) do Fs, pval, sigonly
         if pval
             Y_colored = overlay(Fs, identity)
             idx = findall(isequal(RGBA{N0f8}(0.0, 0.0, 0.0, 1)), Y_colored)
+            sigonly && (Y_colored .= RGBA{N0f8}(0.0, 0.0, 0.0, 1.0))
             Y_colored[idx] .= RGBA{N0f8}(1.0, 0.0, 1.0, 1.0)
             return Y_colored
         else
@@ -280,6 +286,7 @@ function gui(datapath)
     on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
     on(x->@set_preferences!("m"=>x), m.selection)
     on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
+    on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
     on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
     on(x->@set_preferences!("to"=>x), to.active)

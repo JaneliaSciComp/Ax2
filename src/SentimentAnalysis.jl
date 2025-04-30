@@ -48,7 +48,7 @@ function gui(datapath)
     y = @lift $(y_fs_)[1]
     fs = @lift $(y_fs_)[2]
 
-    gl = GridLayout(fig[2:4,4])
+    gl = GridLayout(fig[1:4,4])
     Label(gl[1,1, Top()], "p-val")
     cb_pval = Checkbox(gl[1,1], checked = cb_pval_pref)
     Label(gl[2,1, Top()], "sig. only")
@@ -129,28 +129,40 @@ function gui(datapath)
 
     isl_freq = IntervalSlider(fig[3:4,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
-    gl2 = GridLayout(fig[5,3])
-    bt_left_center = Button(gl2[1,1], label="<")
-    bt_right_center = Button(gl2[1,2], label=">")
+    gl2 = GridLayout(fig[5,3:4])
+    bt_left_big_center = Button(gl2[1,1], label="<<")
+    bt_left_small_center = Button(gl2[1,2], label="<")
+    bt_right_small_center = Button(gl2[1,3], label=">")
+    bt_right_big_center = Button(gl2[1,4], label=">>")
     Label(fig[5,2, Left()], "center")
     step = (nffts[][1]-noverlaps[][1]) / length(y[])
     sl_time_center = Slider(fig[5,2], range=0:step:1, startvalue=sl_time_center_pref)
-    gl3 = GridLayout(fig[6,3])
-    bt_left_width = Button(gl3[1,1], label="<")
-    bt_right_width = Button(gl3[1,2], label=">")
+    gl3 = GridLayout(fig[6,3:4])
+    bt_left_big_width = Button(gl3[1,1], label="<<")
+    bt_left_small_width = Button(gl3[1,2], label="<")
+    bt_right_small_width = Button(gl3[1,3], label=">")
+    bt_right_big_width = Button(gl3[1,4], label=">>")
     Label(fig[6,2, Left()], "width")
     maxvalue = max_width_sec * fs[] / length(y[])
     sl_time_width = Slider(fig[6,2], range=0:step:maxvalue,
                            startvalue = coalesce(sl_time_width_pref, maxvalue))
 
+    on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 2),
+       bt_left_big_center.clicks)
     on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10),
-       bt_left_center.clicks)
+       bt_left_small_center.clicks)
     on(_->set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 10),
-       bt_right_center.clicks)
+       bt_right_small_center.clicks)
+    on(_->set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 2),
+       bt_right_big_center.clicks)
+    on(_->set_close_to!(sl_time_width, sl_time_width.value[]*0.5),
+       bt_left_big_width.clicks)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*0.9),
-       bt_left_width.clicks)
+       bt_left_small_width.clicks)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.1),
-       bt_right_width.clicks)
+       bt_right_small_width.clicks)
+    on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.5),
+       bt_right_big_width.clicks)
 
     # indices into Y
     ifreq = lift(isl_freq.interval, Y_freq) do x, Y_freq

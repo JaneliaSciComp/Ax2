@@ -126,13 +126,7 @@ function gui(datapath)
         end
         return Ys
     end
-    Y = lift(Ys) do Ys
-        Y_scratch = overlay(Ys, x->20*log10.(power(x)))
-        q = quantile(Y_scratch, [0.01,0.99])
-        f = scaleminmax(N0f8, q...)
-        Y_scaled = f.(Y_scratch)
-        dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
-    end
+    Y = @lift overlay($Ys, x->20*log10.(power(x)))
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
@@ -223,17 +217,7 @@ function gui(datapath)
             fill(DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = lift(to.active, Y_MTs) do to, Y_MTs
-        if to
-            Matrix{RGB{N0f8}}(undef, 0, 0)
-        else
-            Y_scratch = overlay(Y_MTs, x->20*log10.(power(x)))
-            q = quantile(Y_scratch, [0.01,0.99])
-            f = scaleminmax(N0f8, q...)
-            Y_scaled = f.(Y_scratch)
-            dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
-        end
-    end
+    Y_MT = @lift $(to.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)))
 
     Fs = lift(mtspectrums, cb_pval.checked) do mts, pval
         if pval
@@ -270,13 +254,17 @@ function gui(datapath)
 
     powers = lift(to.active, Y, itime, ifreq, Y_MT) do to, Y, itime, ifreq, Y_MT
         if to
-            all(in.(extrema(itime), Ref(axes(Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
-            all(in.(extrema(ifreq), Ref(axes(Y,1)))) || return RGBA{N0f8}[1 0; 0 0]
-            return Y'[itime,ifreq]
+            all(in.(extrema(itime), Ref(axes(Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
+            all(in.(extrema(ifreq), Ref(axes(Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
+            Y_scratch = Y[:,ifreq,itime]
         else
-            all(in.(extrema(ifreq), Ref(axes(Y_MT,1)))) || return RGBA{N0f8}[1 0; 0 0]
-            return Y_MT'[1:itime.step:end, ifreq]
+            all(in.(extrema(ifreq), Ref(axes(Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
+            Y_scratch = Y_MT[:, ifreq, 1:itime.step:end]
         end
+        q = quantile(Y_scratch, [0.01,0.99])
+        f = scaleminmax(N0f8, q...)
+        Y_scaled = f.(Y_scratch)
+        collect(dropdims(reinterpret(RGBA{N0f8}, Y_scaled), dims=1)')
     end
 
     freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)

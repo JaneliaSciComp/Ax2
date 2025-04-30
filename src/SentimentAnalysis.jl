@@ -218,7 +218,16 @@ function gui(datapath)
     alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
     alpha_pval = @lift $(cb_pval.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
-    powers = @lift $(to.active) ? $Y'[$itime,$ifreq] : $Y_MT'[1:$itime.step:end, $ifreq]
+    powers = lift(to.active, Y, itime, ifreq, Y_MT) do to, Y, itime, ifreq, Y_MT
+        if to
+            all(in.(extrema(itime), Ref(axes(Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
+            all(in.(extrema(ifreq), Ref(axes(Y,1)))) || return RGBA{N0f8}[1 0; 0 0]
+            return Y'[itime,ifreq]
+        else
+            all(in.(extrema(ifreq), Ref(axes(Y_MT,1)))) || return RGBA{N0f8}[1 0; 0 0]
+            return Y_MT'[1:itime.step:end, ifreq]
+        end
+    end
 
     freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
     times = @lift tuple($Y_time[$itime][[1,end]]...)
@@ -233,7 +242,14 @@ function gui(datapath)
 
     freqs_mt = @lift $(cb_pval.checked) ? $freqs : tuple(0.,0.)
     times_mt = @lift $(cb_pval.checked) ? $times : tuple(0.,0.)
-    pvals = @lift $(cb_pval.checked) ? ($F)'[1:$itime.step:end, $ifreq] : Matrix{RGBA{N0f8}}(undef, 1, 1)
+    pvals = lift(cb_pval.checked, F, itime, ifreq) do pval, F, itime, ifreq
+        if pval
+            all(in.(extrema(ifreq), Ref(axes(F,1)))) || return RGBA{N0f8}[1 0; 0 0]
+            F'[1:itime.step:end, ifreq]
+        else
+            Matrix{RGBA{N0f8}}(undef, 1, 1)
+        end
+    end
     cr = @lift ($thresh,1)
     hm_pvals = image!(times_mt, freqs_mt, pvals;
                       interpolate=false,

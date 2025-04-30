@@ -98,7 +98,16 @@ function gui(datapath)
         dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
     end
 
-    Ys = @lift spectrogram.(Ref($y[:,1]), $nffts; fs=$fs, window=hanning)
+    Ys_cache = Dict{Int,DSP.Periodograms.Spectrogram}()
+    Ys = lift(y, nffts, fs) do y, nffts, fs
+        Ys = DSP.Periodograms.Spectrogram[]
+        for nfft in nffts
+            push!(Ys,
+                  get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning),
+                       Ys_cache, nfft))
+        end
+        return Ys
+    end
     Y = @lift overlay($Ys, x->20*log10.(power(x)), [0.01,0.99])
 
     Y_freq = @lift freq($Ys[argmax($nffts)])

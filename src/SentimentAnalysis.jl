@@ -4,21 +4,70 @@ using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMet
 
 export gui
 
-function gui(datapath)
-    pref_defaults = (;
-        figsize = (640,450),
-        isl_freq = missing,
-        sl_time_center = 0,
-        sl_time_width = missing,
-        m = missing,
-        cb_pval = false,
-        cb_sigonly = false,
-        tb_thresh = "0.01",
-        cb_power = true,
-        to = true,
-        tb_nfft = "512",
-        )
+overlay(Ys, f, p) = overlay(f.(Ys), p)
+function overlay(Ys, p)
+    ntime, nfreq = size.(Ys,2), size.(Ys,1)
+    mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
+    minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
+    Y_scratch = zeros(Float32, 4, minfreq, mintime)
+    for (icolor, Yi) in enumerate(Ys)
+        sz = size(Yi)
+        scale = round.(Int, (minfreq, mintime) ./ sz)
+        for f0 in 1:scale[1], t0 in 1:scale[2]
+            fdelta = sz[1] - length(f0:scale[1]:minfreq)
+            tdelta = sz[2] - length(t0:scale[2]:mintime)
+            Y_scratch[icolor,
+              f0 : scale[1] : end,
+              t0 : scale[2] : end] .= Yi[1:end-fdelta, 1:end-tdelta]
+        end
+    end
+    q = quantile(Y_scratch, p)
+    f = scaleminmax(N0f8, q...)
+    Y_scaled = f.(Y_scratch)
+    Y_scaled[4,:,:] .= 1
+    if length(Ys) == 2
+        Y_scaled[3,:,:] .= Y_scaled[2,:,:]
+        Y_scaled[2,:,:] .= Y_scaled[1,:,:]
+    elseif length(Ys) == 1
+        Y_scaled[2,:,:] .= Y_scaled[3,:,:] .= Y_scaled[1,:,:]
+    end
+    dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+end
 
+function multitaper_spectrogram(y, i1, i2, n; fs=1, nw=4.0, k=6, tapers=tapers)
+
+    @memoize LRU(maxsize=1_000_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
+            multispec((@view y[idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
+
+    noverlap = div(n, 2)
+    idxs = i1 : n-noverlap : i2+1-n+1
+    mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
+    @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
+        mtspectrum[i] = _multispec(idx, n, nw, k, 1/fs, tapers, true)
+    end
+    return mtspectrum
+end
+
+function _cumpower(p,d)
+    x = dropdims(sum(p, dims=d), dims=d)
+    @. red(x) + green(x) + blue(x)
+end
+
+pref_defaults = (;
+    figsize = (640,450),
+    isl_freq = missing,
+    sl_time_center = 0,
+    sl_time_width = missing,
+    m = missing,
+    cb_pval = false,
+    cb_sigonly = false,
+    tb_thresh = "0.01",
+    cb_power = true,
+    to = true,
+    tb_nfft = "512",
+    )
+
+function gui(datapath)
     _figsize_pref = @load_preference("figsize", pref_defaults.figsize)
     figsize_pref = typeof(_figsize_pref)<:Tuple ? _figsize_pref : eval(Meta.parse(_figsize_pref))
     _isl_freq_pref = @load_preference("isl_freq", pref_defaults.isl_freq)
@@ -69,35 +118,6 @@ function gui(datapath)
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
     noverlaps = @lift div.($nffts, 2)
 
-    function overlay(Ys, f, p)
-        ntime, nfreq = size.(f.(Ys),2), size.(f.(Ys),1)
-        mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
-        minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
-        Y_scratch = zeros(Float32, 4, minfreq, mintime)
-        for (icolor, Yi) in enumerate(Ys)
-            sz = size(f(Yi))
-            scale = round.(Int, (minfreq, mintime) ./ sz)
-            for f0 in 1:scale[1], t0 in 1:scale[2]
-                fdelta = sz[1] - length(f0:scale[1]:minfreq)
-                tdelta = sz[2] - length(t0:scale[2]:mintime)
-                Y_scratch[icolor,
-                  f0 : scale[1] : end,
-                  t0 : scale[2] : end] .= f(Yi)[1:end-fdelta, 1:end-tdelta]
-            end
-        end
-        q = quantile(Y_scratch, p)
-        f = scaleminmax(N0f8, q...)
-        Y_scaled = f.(Y_scratch)
-        Y_scaled[4,:,:] .= 1
-        if length(Ys) == 2
-            Y_scaled[3,:,:] .= Y_scaled[2,:,:]
-            Y_scaled[2,:,:] .= Y_scaled[1,:,:]
-        elseif length(Ys) == 1
-            Y_scaled[2,:,:] .= Y_scaled[3,:,:] .= Y_scaled[1,:,:]
-        end
-        dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
-    end
-
     Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
     Ys = lift(y, nffts, fs) do y, nffts, fs
         Ys = DSP.Periodograms.Spectrogram[]
@@ -115,18 +135,6 @@ function gui(datapath)
     Y_time = @lift time($Ys[argmin($nffts)])
 
     tapers = @lift dpss_tapers.($nffts, nw, k, :tap)
-
-    @memoize LRU(maxsize=100_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
-            multispec((@view y[][idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
-    function multitaper_spectrogram(i1, i2, n; fs=1, nw=4.0, k=6, tapers=tapers)
-        noverlap = div(n, 2)
-        idxs = i1 : n-noverlap : i2+1-n+1
-        mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
-        @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
-            mtspectrum[i] = _multispec(idx, n, nw, k, 1/fs, tapers, true)
-        end
-        return mtspectrum
-    end
 
     isl_freq = IntervalSlider(fig[3:4,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
@@ -190,7 +198,7 @@ function gui(datapath)
         if !to || pval
             mtspectrums = []
             for (nfft, taper) in zip(nffts, tapers)
-                push!(mtspectrums, multitaper_spectrogram(iclip..., nfft; fs=fs, tapers=taper))
+                push!(mtspectrums, multitaper_spectrogram(y, iclip..., nfft; fs=fs, tapers=taper))
             end
             return mtspectrums
         else
@@ -285,11 +293,6 @@ function gui(datapath)
     ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
     ax1.ylabel[] = "amplitude"
     on(yc->limits!(ax1, 1, length(yc), extrema(yc)...), y_clip)
-
-    function _cumpower(p,d)
-        x = dropdims(sum(p, dims=d), dims=d)
-        @. red(x) + green(x) + blue(x)
-    end
 
     cumpowers1 = @lift _cumpower($powers, 1)
     cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, 1:length($cumpowers1)))

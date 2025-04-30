@@ -4,8 +4,8 @@ using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMet
 
 export gui
 
-overlay(Ys, f, p) = overlay(f.(Ys), p)
-function overlay(Ys, p)
+overlay(Ys, f) = overlay(f.(Ys))
+function overlay(Ys)
     ntime, nfreq = size.(Ys,2), size.(Ys,1)
     mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
     minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
@@ -21,17 +21,14 @@ function overlay(Ys, p)
               t0 : scale[2] : end] .= Yi[1:end-fdelta, 1:end-tdelta]
         end
     end
-    q = quantile(Y_scratch, p)
-    f = scaleminmax(N0f8, q...)
-    Y_scaled = f.(Y_scratch)
-    Y_scaled[4,:,:] .= 1
+    Y_scratch[4,:,:] .= 1
     if length(Ys) == 2
-        Y_scaled[3,:,:] .= Y_scaled[2,:,:]
-        Y_scaled[2,:,:] .= Y_scaled[1,:,:]
+        Y_scratch[3,:,:] .= Y_scratch[2,:,:]
+        Y_scratch[2,:,:] .= Y_scratch[1,:,:]
     elseif length(Ys) == 1
-        Y_scaled[2,:,:] .= Y_scaled[3,:,:] .= Y_scaled[1,:,:]
+        Y_scratch[2,:,:] .= Y_scratch[3,:,:] .= Y_scratch[1,:,:]
     end
-    dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+    return Y_scratch
 end
 
 function multitaper_spectrogram(y, i1, i2, n; fs=1, nw=4.0, k=6, tapers=tapers)
@@ -129,7 +126,13 @@ function gui(datapath)
         end
         return Ys
     end
-    Y = @lift overlay($Ys, x->20*log10.(power(x)), [0.01,0.99])
+    Y = lift(Ys) do Ys
+        Y_scratch = overlay(Ys, x->20*log10.(power(x)))
+        q = quantile(Y_scratch, [0.01,0.99])
+        f = scaleminmax(N0f8, q...)
+        Y_scaled = f.(Y_scratch)
+        dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+    end
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
@@ -220,7 +223,17 @@ function gui(datapath)
             fill(DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = @lift $(to.active) ? Matrix{RGB{N0f8}}(undef, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)), [0.01,0.99])
+    Y_MT = lift(to.active, Y_MTs) do to, Y_MTs
+        if to
+            Matrix{RGB{N0f8}}(undef, 0, 0)
+        else
+            Y_scratch = overlay(Y_MTs, x->20*log10.(power(x)))
+            q = quantile(Y_scratch, [0.01,0.99])
+            f = scaleminmax(N0f8, q...)
+            Y_scaled = f.(Y_scratch)
+            dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+        end
+    end
 
     Fs = lift(mtspectrums, cb_pval.checked) do mts, pval
         if pval
@@ -235,11 +248,18 @@ function gui(datapath)
     end
     F = lift(Fs, cb_pval.checked, cb_sigonly.checked, thresh) do Fs, pval, sigonly, thresh
         if pval
-            Y_colored = overlay(Fs, identity, (thresh, 0.99))
-            idx = findall(isequal(RGBA{N0f8}(0.0, 0.0, 0.0, 1)), Y_colored)
-            sigonly && (Y_colored .= RGBA{N0f8}(0.0, 0.0, 0.0, 1.0))
-            Y_colored[idx] .= RGBA{N0f8}(1.0, 0.0, 1.0, 1.0)
-            return Y_colored
+            Y_scratch = overlay(Fs)
+            for j in axes(Y_scratch,2), k in axes(Y_scratch,3)
+                if all(Y_scratch[1:3,j,k] .< thresh)
+                    Y_scratch[:,j,k] .= 1
+                    Y_scratch[2,j,k] = 0
+                elseif sigonly
+                    Y_scratch[:,j,k] .= 0
+                    Y_scratch[4,j,k] = 1
+                end
+            end
+            Y_scaled = N0f8.(Y_scratch)
+            dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
         else
             Matrix{RGBA{N0f8}}(undef, 0, 0)
         end

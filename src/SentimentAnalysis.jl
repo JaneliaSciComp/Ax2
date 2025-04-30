@@ -98,13 +98,14 @@ function gui(datapath)
         dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
     end
 
-    Ys_cache = Dict{Int,DSP.Periodograms.Spectrogram}()
+    Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
     Ys = lift(y, nffts, fs) do y, nffts, fs
         Ys = DSP.Periodograms.Spectrogram[]
-        for nfft in nffts
-            push!(Ys,
-                  get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning),
-                       Ys_cache, nfft))
+        l = ReentrantLock()
+        Threads.@threads for nfft in nffts
+            _Y = get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning),
+                      Ys_cache, nfft)
+            lock(l);  push!(Ys, _Y);  unlock(l)
         end
         return Ys
     end

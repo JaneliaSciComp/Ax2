@@ -69,7 +69,7 @@ function gui(datapath)
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
     noverlaps = @lift div.($nffts, 2)
 
-    function overlay(Ys, f)
+    function overlay(Ys, f, p)
         ntime, nfreq = size.(f.(Ys),2), size.(f.(Ys),1)
         mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
         minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
@@ -85,7 +85,7 @@ function gui(datapath)
                   t0 : scale[2] : end] .= f(Yi)[1:end-fdelta, 1:end-tdelta]
             end
         end
-        q = quantile(Y_scratch, [0.01,0.99])
+        q = quantile(Y_scratch, p)
         f = scaleminmax(N0f8, q...)
         Y_scaled = f.(Y_scratch)
         Y_scaled[4,:,:] .= 1
@@ -99,7 +99,7 @@ function gui(datapath)
     end
 
     Ys = @lift spectrogram.(Ref($y[:,1]), $nffts; fs=$fs, window=hanning)
-    Y = @lift overlay($Ys, x->20*log10.(power(x)))
+    Y = @lift overlay($Ys, x->20*log10.(power(x)), [0.01,0.99])
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
@@ -190,7 +190,7 @@ function gui(datapath)
             fill(DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = @lift $(to.active) ? Matrix{RGB{N0f8}}(undef, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)))
+    Y_MT = @lift $(to.active) ? Matrix{RGB{N0f8}}(undef, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)), [0.01,0.99])
 
     Fs = lift(mtspectrums, cb_pval.checked) do mts, pval
         if pval
@@ -203,9 +203,9 @@ function gui(datapath)
             fill(Matrix{Float64}(undef, 0, 0), 0)
         end
     end
-    F = lift(Fs, cb_pval.checked, cb_sigonly.checked) do Fs, pval, sigonly
+    F = lift(Fs, cb_pval.checked, cb_sigonly.checked, thresh) do Fs, pval, sigonly, thresh
         if pval
-            Y_colored = overlay(Fs, identity)
+            Y_colored = overlay(Fs, identity, (thresh, 0.99))
             idx = findall(isequal(RGBA{N0f8}(0.0, 0.0, 0.0, 1)), Y_colored)
             sigonly && (Y_colored .= RGBA{N0f8}(0.0, 0.0, 0.0, 1.0))
             Y_colored[idx] .= RGBA{N0f8}(1.0, 0.0, 1.0, 1.0)

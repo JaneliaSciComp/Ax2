@@ -58,6 +58,7 @@ pref_defaults = (;
     m = missing,
     cb_pval = false,
     cb_sigonly = false,
+    tb_nwk = "4,6",
     tb_thresh = "0.01",
     cb_power = true,
     to = true,
@@ -75,6 +76,7 @@ function gui(datapath)
     m_pref = @load_preference("m", pref_defaults.m)
     cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
     cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
+    tb_nwk_pref = @load_preference("tb_nwk", pref_defaults.tb_nwk)
     tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
     to_pref = @load_preference("to", pref_defaults.to)
@@ -83,7 +85,6 @@ function gui(datapath)
 
     hz2khz = 1000
     fs_play = 48_000
-    nw, k = 4.0, 6
     display_size = (3000,2000)
     max_width_sec = 60
 
@@ -97,24 +98,29 @@ function gui(datapath)
     fs = @lift $(y_fs_)[2]
 
     gl = GridLayout(fig[1:4,4])
-    Label(gl[1,1, Top()], "p-val")
-    cb_pval = Checkbox(gl[1,1], checked = cb_pval_pref)
-    Label(gl[2,1, Top()], "sig. only")
-    cb_sigonly = Checkbox(gl[2,1], checked = cb_sigonly_pref)
-    Label(gl[3,1,Top()], "threshold")
-    tb_thresh = Textbox(gl[3,1], stored_string=tb_thresh_pref, validator=Float64)
-    Label(gl[4,1, Top()], "power")
-    cb_power = Checkbox(gl[4,1], checked = cb_power_pref)
-    Label(gl[5,1, Top()], "Hanning")
-    Label(gl[5,1, Bottom()], "Slepian")
-    to = Toggle(gl[5,1], active=to_pref, orientation=:vertical)
-    Label(gl[6,1,Top()], "nfft")
-    tb_nfft = Textbox(gl[6,1], stored_string=tb_nfft_pref,
+    Label(gl[1,1, Top()], "tooltips")
+    cb_tooltips = Checkbox(gl[1,1], checked = cb_tooltips_pref)
+    Label(gl[2,1, Top()], "p-val")
+    cb_pval = Checkbox(gl[2,1], checked = cb_pval_pref)
+    Label(gl[3,1, Top()], "sig. only")
+    cb_sigonly = Checkbox(gl[3,1], checked = cb_sigonly_pref)
+    Label(gl[4,1,Top()], "NW,K")
+    tb_nwk = Textbox(gl[4,1], stored_string=tb_nwk_pref,
+                     validator = s -> all(isdigit(c) || in(c,".,") for c in s))
+    Label(gl[5,1,Top()], "threshold")
+    tb_thresh = Textbox(gl[5,1], stored_string=tb_thresh_pref, validator=Float64)
+    Label(gl[6,1, Top()], "power")
+    cb_power = Checkbox(gl[6,1], checked = cb_power_pref)
+    Label(gl[7,1, Top()], "Hanning")
+    Label(gl[7,1, Bottom()], "Slepian")
+    to = Toggle(gl[7,1], active=to_pref, orientation=:vertical)
+    Label(gl[8,1,Top()], "nfft")
+    tb_nfft = Textbox(gl[8,1], stored_string=tb_nfft_pref,
                       validator = s -> all(isdigit(c) || c==',' for c in s))
-    bt_play = Button(gl[7,1], label="play")
-    Label(gl[8,1, Top()], "tooltips")
-    cb_tooltips = Checkbox(gl[8,1], checked = cb_tooltips_pref)
+    bt_play = Button(gl[9,1], label="play")
 
+    nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
+    k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
     noverlaps = @lift div.($nffts, 2)
@@ -135,7 +141,7 @@ function gui(datapath)
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
 
-    tapers = @lift dpss_tapers.($nffts, nw, k, :tap)
+    tapers = @lift dpss_tapers.($nffts, $nw, $k, :tap)
 
     isl_freq = IntervalSlider(fig[3:4,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
@@ -195,11 +201,12 @@ function gui(datapath)
         (max(1, frac2tic(c-w)), min(length(y), frac2tic(c+w)))
     end
 
-    mtspectrums = lift(y, to.active, cb_pval.checked, fs, tapers, iclip, nffts) do y, to, pval, fs, tapers, iclip, nffts
+    mtspectrums = lift(y, to.active, cb_pval.checked, fs, nw, k, tapers, iclip, nffts) do y, to, pval, fs, nw, k, tapers, iclip, nffts
         if !to || pval
             mtspectrums = []
             for (nfft, taper) in zip(nffts, tapers)
-                push!(mtspectrums, multitaper_spectrogram(y, iclip..., nfft; fs=fs, tapers=taper))
+                push!(mtspectrums, multitaper_spectrogram(y, iclip..., nfft;
+                                                          fs=fs, nw=nw, k=k, tapers=taper))
             end
             return mtspectrums
         else
@@ -354,6 +361,19 @@ function gui(datapath)
         wavplay(ydown, fs_play)
     end
 
+    tooltip!(tb_nwk,
+             """
+             K is # of tapers
+             NW is the spectral bandwidth
+             K should be less than 2NW-1
+             """,
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_nfft,
+             """
+             short time windows can resolve quickly varying signals better
+             """,
+             placement = :left, enabled = cb_tooltips.checked)
+
     for cb in (cb_pval, cb_sigonly, cb_power, cb_tooltips)
         foreach(x->x.inspectable[]=false, cb.blockscene.plots)
     end
@@ -366,6 +386,7 @@ function gui(datapath)
     on(x->@set_preferences!("m"=>x), m.selection)
     on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
     on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
+    on(x->@set_preferences!("tb_nwk"=>x), tb_nwk.stored_string)
     on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
     on(x->@set_preferences!("to"=>x), to.active)

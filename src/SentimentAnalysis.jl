@@ -68,6 +68,7 @@ pref_defaults = (;
     cb_morphopen = false,
     tb_strelclose = "3x9",
     tb_strelopen = "3x9",
+    tb_minpix = "0",
     )
 
 function gui(datapath)
@@ -90,6 +91,7 @@ function gui(datapath)
     tb_strelclose_pref = @load_preference("tb_strelclose", pref_defaults.tb_strelclose)
     cb_morphopen_pref = @load_preference("cb_morphopen", pref_defaults.cb_morphopen)
     tb_strelopen_pref = @load_preference("tb_strelopen", pref_defaults.tb_strelopen)
+    tb_minpix_pref = @load_preference("tb_minpix", pref_defaults.tb_minpix)
 
     hz2khz = 1000
     fs_play = 48_000
@@ -119,18 +121,17 @@ function gui(datapath)
     tb_nfft = Textbox(gl_fft[3,1], stored_string=tb_nfft_pref,
                       validator = s -> all(isdigit(c) || c==',' for c in s))
 
-    gl_mt = GridLayout(fig[1:3,5])
-    Label(gl_mt[1,1, Top()], "p-val")
-    cb_pval = Checkbox(gl_mt[1,1], checked = cb_pval_pref)
-    Label(gl_mt[2,1,Top()], "NW,K")
-    tb_nwk = Textbox(gl_mt[2,1], stored_string=tb_nwk_pref,
+    Label(gl_fft[4,1, Top()], "p-val")
+    cb_pval = Checkbox(gl_fft[4,1], checked = cb_pval_pref)
+    Label(gl_fft[5,1,Top()], "NW,K")
+    tb_nwk = Textbox(gl_fft[5,1], stored_string=tb_nwk_pref,
                      validator = s -> all(isdigit(c) || in(c,".,") for c in s))
-    Label(gl_mt[3,1,Top()], "threshold")
-    tb_thresh = Textbox(gl_mt[3,1], stored_string=tb_thresh_pref, validator=Float64)
-    Label(gl_mt[4,1, Top()], "sig. only")
-    cb_sigonly = Checkbox(gl_mt[4,1], checked = cb_sigonly_pref)
+    Label(gl_fft[6,1,Top()], "threshold")
+    tb_thresh = Textbox(gl_fft[6,1], stored_string=tb_thresh_pref, validator=Float64)
+    Label(gl_fft[7,1, Top()], "sig. only")
+    cb_sigonly = Checkbox(gl_fft[7,1], checked = cb_sigonly_pref)
 
-    gl_morph = GridLayout(fig[1:3,6])
+    gl_morph = GridLayout(fig[1:3,5])
     Label(gl_morph[1,1, Top()], "morph.\nclose")
     cb_morphclose = Checkbox(gl_morph[1,1], checked = cb_morphclose_pref)
     Label(gl_morph[2,1, Top()], "str. el.")
@@ -142,6 +143,10 @@ function gui(datapath)
     tb_strelopen = Textbox(gl_morph[4,1], stored_string=tb_strelopen_pref,
                            validator = s -> all(isdigit(c) || c=='x' for c in s))
 
+    Label(gl_morph[5,1, Top()], "min. pix")
+    tb_minpix = Textbox(gl_morph[5,1], stored_string=tb_minpix_pref,
+                        validator = s -> all(isdigit(c) for c in s))
+
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
     noverlaps = @lift div.($nffts, 2)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
@@ -149,6 +154,7 @@ function gui(datapath)
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
     strelclose = @lift strel_box(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
     strelopen = @lift strel_box(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
+    minpix = @lift parse(Int, $(tb_minpix.stored_string))
 
     Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
     Ys = lift(y, nffts, fs) do y, nffts, fs
@@ -301,6 +307,15 @@ function gui(datapath)
                     Y_scratch[2,:,:] .= 0
                     Y_scratch[4,:,:] .= 1
                 end
+                if $(minpix)>0
+                    labels = label_components(Y_scratch[1,:,:], trues(3,3))
+                    indices = component_indices(labels)
+                    for idx in Iterators.filter(x->length(x) < $minpix, Iterators.drop(indices, 1))
+                        view(Y_scratch, 1,:,:)[idx] .= 0
+                        view(Y_scratch, 2,:,:)[idx] .= 0
+                        view(Y_scratch, 3,:,:)[idx] .= 0
+                    end
+                end
             end
             Y_scaled = N0f8.(Y_scratch)
             dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
@@ -439,6 +454,7 @@ function gui(datapath)
     on(x->@set_preferences!("tb_strelclose"=>x), tb_strelclose.stored_string)
     on(x->@set_preferences!("cb_morphopen"=>x), cb_morphopen.checked)
     on(x->@set_preferences!("tb_strelopen"=>x), tb_strelopen.stored_string)
+    on(x->@set_preferences!("tb_minpix"=>x), tb_minpix.stored_string)
 
     notify(freqs)
     notify(cumpowers1)

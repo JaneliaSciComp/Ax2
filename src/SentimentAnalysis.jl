@@ -1,6 +1,6 @@
 module SentimentAnalysis
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology
 
 export gui
 
@@ -56,14 +56,18 @@ pref_defaults = (;
     sl_time_center = 0,
     sl_time_width = missing,
     m = missing,
-    cb_pval = false,
-    cb_sigonly = false,
-    tb_nwk = "4,6",
-    tb_thresh = "0.01",
+    cb_tooltips = false,
     cb_power = true,
     to = true,
     tb_nfft = "512",
-    cb_tooltips = false,
+    cb_pval = false,
+    tb_nwk = "4,6",
+    tb_thresh = "0.01",
+    cb_sigonly = false,
+    cb_morphclose = false,
+    cb_morphopen = false,
+    tb_strelclose = "3x9",
+    tb_strelopen = "3x9",
     )
 
 function gui(datapath)
@@ -74,14 +78,18 @@ function gui(datapath)
     sl_time_center_pref = @load_preference("sl_time_center", pref_defaults.sl_time_center)
     sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
     m_pref = @load_preference("m", pref_defaults.m)
-    cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
-    cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
-    tb_nwk_pref = @load_preference("tb_nwk", pref_defaults.tb_nwk)
-    tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
+    cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
     to_pref = @load_preference("to", pref_defaults.to)
     tb_nfft_pref = @load_preference("tb_nfft", pref_defaults.tb_nfft)
-    cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
+    cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
+    tb_nwk_pref = @load_preference("tb_nwk", pref_defaults.tb_nwk)
+    tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
+    cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
+    cb_morphclose_pref = @load_preference("cb_morphclose", pref_defaults.cb_morphclose)
+    tb_strelclose_pref = @load_preference("tb_strelclose", pref_defaults.tb_strelclose)
+    cb_morphopen_pref = @load_preference("cb_morphopen", pref_defaults.cb_morphopen)
+    tb_strelopen_pref = @load_preference("tb_strelopen", pref_defaults.tb_strelopen)
 
     hz2khz = 1000
     fs_play = 48_000
@@ -97,33 +105,50 @@ function gui(datapath)
     y = @lift $(y_fs_)[1]
     fs = @lift $(y_fs_)[2]
 
-    gl = GridLayout(fig[1:4,4])
-    Label(gl[1,1, Top()], "tooltips")
-    cb_tooltips = Checkbox(gl[1,1], checked = cb_tooltips_pref)
-    Label(gl[2,1, Top()], "p-val")
-    cb_pval = Checkbox(gl[2,1], checked = cb_pval_pref)
-    Label(gl[3,1, Top()], "sig. only")
-    cb_sigonly = Checkbox(gl[3,1], checked = cb_sigonly_pref)
-    Label(gl[4,1,Top()], "NW,K")
-    tb_nwk = Textbox(gl[4,1], stored_string=tb_nwk_pref,
-                     validator = s -> all(isdigit(c) || in(c,".,") for c in s))
-    Label(gl[5,1,Top()], "threshold")
-    tb_thresh = Textbox(gl[5,1], stored_string=tb_thresh_pref, validator=Float64)
-    Label(gl[6,1, Top()], "power")
-    cb_power = Checkbox(gl[6,1], checked = cb_power_pref)
-    Label(gl[7,1, Top()], "Hanning")
-    Label(gl[7,1, Bottom()], "Slepian")
-    to = Toggle(gl[7,1], active=to_pref, orientation=:vertical)
-    Label(gl[8,1,Top()], "nfft")
-    tb_nfft = Textbox(gl[8,1], stored_string=tb_nfft_pref,
-                      validator = s -> all(isdigit(c) || c==',' for c in s))
-    bt_play = Button(gl[9,1], label="play")
+    gl_tt = GridLayout(fig[2,3])
+    Label(gl_tt[1,1, Bottom()], "tooltips", tellheight=false, tellwidth=false)
+    cb_tooltips = Checkbox(gl_tt[2,1, Top()], checked = cb_tooltips_pref, tellheight=false, tellwidth=false)
 
+    gl_fft = GridLayout(fig[1:3,4])
+    Label(gl_fft[1,1, Top()], "power")
+    cb_power = Checkbox(gl_fft[1,1], checked = cb_power_pref)
+    Label(gl_fft[2,1, Top()], "Hanning")
+    Label(gl_fft[2,1, Bottom()], "Slepian")
+    to = Toggle(gl_fft[2,1], active=to_pref, orientation=:vertical)
+    Label(gl_fft[3,1,Top()], "nfft")
+    tb_nfft = Textbox(gl_fft[3,1], stored_string=tb_nfft_pref,
+                      validator = s -> all(isdigit(c) || c==',' for c in s))
+
+    gl_mt = GridLayout(fig[1:3,5])
+    Label(gl_mt[1,1, Top()], "p-val")
+    cb_pval = Checkbox(gl_mt[1,1], checked = cb_pval_pref)
+    Label(gl_mt[2,1,Top()], "NW,K")
+    tb_nwk = Textbox(gl_mt[2,1], stored_string=tb_nwk_pref,
+                     validator = s -> all(isdigit(c) || in(c,".,") for c in s))
+    Label(gl_mt[3,1,Top()], "threshold")
+    tb_thresh = Textbox(gl_mt[3,1], stored_string=tb_thresh_pref, validator=Float64)
+    Label(gl_mt[4,1, Top()], "sig. only")
+    cb_sigonly = Checkbox(gl_mt[4,1], checked = cb_sigonly_pref)
+
+    gl_morph = GridLayout(fig[1:3,6])
+    Label(gl_morph[1,1, Top()], "morph.\nclose")
+    cb_morphclose = Checkbox(gl_morph[1,1], checked = cb_morphclose_pref)
+    Label(gl_morph[2,1, Top()], "str. el.")
+    tb_strelclose = Textbox(gl_morph[2,1], stored_string=tb_strelclose_pref,
+                            validator = s -> all(isdigit(c) || c=='x' for c in s))
+    Label(gl_morph[3,1, Top()], "morph.\nopen")
+    cb_morphopen = Checkbox(gl_morph[3,1], checked = cb_morphopen_pref)
+    Label(gl_morph[4,1, Top()], "str. el.")
+    tb_strelopen = Textbox(gl_morph[4,1], stored_string=tb_strelopen_pref,
+                           validator = s -> all(isdigit(c) || c=='x' for c in s))
+
+    nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
+    noverlaps = @lift div.($nffts, 2)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
     k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
-    nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
-    noverlaps = @lift div.($nffts, 2)
+    strelclose = @lift strel_box(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
+    strelopen = @lift strel_box(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
 
     Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
     Ys = lift(y, nffts, fs) do y, nffts, fs
@@ -143,24 +168,25 @@ function gui(datapath)
 
     tapers = @lift dpss_tapers.($nffts, $nw, $k, :tap)
 
-    isl_freq = IntervalSlider(fig[3:4,1], range=0:0.01:1, horizontal=false,
+    isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
-    gl2 = GridLayout(fig[5,3:4])
-    bt_left_big_center = Button(gl2[1,1], label="<<")
-    bt_left_small_center = Button(gl2[1,2], label="<")
-    bt_right_small_center = Button(gl2[1,3], label=">")
-    bt_right_big_center = Button(gl2[1,4], label=">>")
-    Label(fig[5,2, Left()], "center")
+    gl_pan = GridLayout(fig[4,3:4], halign=:left)
+    bt_left_big_center = Button(gl_pan[1,1], label="<<")
+    bt_left_small_center = Button(gl_pan[1,2], label="<")
+    bt_right_small_center = Button(gl_pan[1,3], label=">")
+    bt_right_big_center = Button(gl_pan[1,4], label=">>")
+    Label(fig[4,2, Left()], "center")
     step = (nffts[][1]-noverlaps[][1]) / length(y[])
-    sl_time_center = Slider(fig[5,2], range=0:step:1, startvalue=sl_time_center_pref)
-    gl3 = GridLayout(fig[6,3:4])
-    bt_left_big_width = Button(gl3[1,1], label="<<")
-    bt_left_small_width = Button(gl3[1,2], label="<")
-    bt_right_small_width = Button(gl3[1,3], label=">")
-    bt_right_big_width = Button(gl3[1,4], label=">>")
-    Label(fig[6,2, Left()], "width")
+    sl_time_center = Slider(fig[4,2], range=0:step:1, startvalue=sl_time_center_pref)
+
+    gl_zoom = GridLayout(fig[5,3:4], halign=:left)
+    bt_left_big_width = Button(gl_zoom[1,1], label="<<")
+    bt_left_small_width = Button(gl_zoom[1,2], label="<")
+    bt_right_small_width = Button(gl_zoom[1,3], label=">")
+    bt_right_big_width = Button(gl_zoom[1,4], label=">>")
+    Label(fig[5,2, Left()], "width")
     maxvalue = max_width_sec * fs[] / length(y[])
-    sl_time_width = Slider(fig[6,2], range=0:step:maxvalue,
+    sl_time_width = Slider(fig[5,2], range=0:step:maxvalue,
                            startvalue = coalesce(sl_time_width_pref, maxvalue))
 
     on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 2),
@@ -179,6 +205,15 @@ function gui(datapath)
        bt_right_small_width.clicks)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.5),
        bt_right_big_width.clicks)
+
+    bt_play = Button(fig[6,3], label="play", tellheight=false, tellwidth=false)
+
+    onany(bt_play.clicks) do _
+        yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
+                         y[][iclip[][1]:iclip[][2], 1])
+        ydown = resample(yfilt, fs_play/fs[])
+        wavplay(ydown, fs_play)
+    end
 
     # indices into Y
     ifreq = lift(isl_freq.interval, Y_freq) do x, Y_freq
@@ -241,16 +276,30 @@ function gui(datapath)
             fill(Matrix{Float64}(undef, 0, 0), 0)
         end
     end
-    F = lift(Fs, cb_pval.checked, cb_sigonly.checked, thresh) do Fs, pval, sigonly, thresh
-        if pval
-            Y_scratch = overlay(Fs)
+    F = @lift begin
+        if $(cb_pval.checked)
+            Y_scratch = overlay($Fs)
             for j in axes(Y_scratch,2), k in axes(Y_scratch,3)
-                if all(Y_scratch[1:3,j,k] .< thresh)
+                if all(Y_scratch[1:3,j,k] .< $thresh)
                     Y_scratch[:,j,k] .= 1
                     Y_scratch[2,j,k] = 0
-                elseif sigonly
+                elseif $(cb_sigonly.checked)
                     Y_scratch[:,j,k] .= 0
                     Y_scratch[4,j,k] = 1
+                end
+            end
+            if $(cb_sigonly.checked)
+                if $(cb_morphclose.checked)
+                    Y_closed = closing(Y_scratch[1,:,:], $strelclose)
+                    Y_scratch .= reshape(Y_closed, 1, size(Y_closed)...)
+                    Y_scratch[2,:,:] .= 0
+                    Y_scratch[4,:,:] .= 1
+                end
+                if $(cb_morphopen.checked)
+                    Y_opened = opening(Y_scratch[1,:,:], $strelopen)
+                    Y_scratch .= reshape(Y_opened, 1, size(Y_opened)...)
+                    Y_scratch[2,:,:] .= 0
+                    Y_scratch[4,:,:] .= 1
                 end
             end
             Y_scaled = N0f8.(Y_scratch)
@@ -281,7 +330,7 @@ function gui(datapath)
 
     freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
     times = @lift tuple($Y_time[$itime][[1,end]]...)
-    ax,hm = image(fig[3:4,2], times, freqs, powers;
+    ax,hm = image(fig[3,2], times, freqs, powers;
                   interpolate=false, alpha=alpha_power, visible=cb_power.checked,
                   inspector_label = (pl,i,pos)->string(
                           "time = ", pos[1], " sec\n",
@@ -319,7 +368,7 @@ function gui(datapath)
     y_clip = @lift view(y[], $iclip_subsampled)
     times_yclip = @lift Point2f.(zip($iclip_subsampled ./ $fs, $y_clip))
 
-    ax1, li1 = lines(fig[7,2], times_yclip,
+    ax1, li1 = lines(fig[6,2], times_yclip,
                      inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
                                                           "amplitude = ", pos[2], " V"))
     ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
@@ -330,7 +379,7 @@ function gui(datapath)
     cumpowers1 = @lift _cumpower($powers, 1)
     cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $Y_freq[$ifreq]))
 
-    ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs,
+    ax2, li2 = lines(fig[3,3], cumpowers1_freqs,
                      inspector_label = (pl,i,pos)->string("freq = ", pos[2], " Hz\n",
                                                           "power = ", pos[1], " dB"))
     ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
@@ -353,13 +402,7 @@ function gui(datapath)
     colsize!(fig.layout, 3, Auto(1))
     rowsize!(fig.layout, 2, Auto(1))
     rowsize!(fig.layout, 3, Auto(4))
-
-    onany(bt_play.clicks) do _
-        yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
-                         y[][iclip[][1]:iclip[][2], 1])
-        ydown = resample(yfilt, fs_play/fs[])
-        wavplay(ydown, fs_play)
-    end
+    rowsize!(fig.layout, 6, Auto(1))
 
     tooltip!(tb_nwk,
              """
@@ -374,7 +417,7 @@ function gui(datapath)
              """,
              placement = :left, enabled = cb_tooltips.checked)
 
-    for cb in (cb_pval, cb_sigonly, cb_power, cb_tooltips)
+    for cb in (cb_tooltips, cb_power, cb_pval, cb_sigonly, cb_morphclose, cb_morphopen)
         foreach(x->x.inspectable[]=false, cb.blockscene.plots)
     end
     DataInspector(enabled=cb_tooltips.checked)
@@ -384,14 +427,18 @@ function gui(datapath)
     on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
     on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
     on(x->@set_preferences!("m"=>x), m.selection)
-    on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
-    on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
-    on(x->@set_preferences!("tb_nwk"=>x), tb_nwk.stored_string)
-    on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
+    on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
     on(x->@set_preferences!("to"=>x), to.active)
     on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
-    on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
+    on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
+    on(x->@set_preferences!("tb_nwk"=>x), tb_nwk.stored_string)
+    on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
+    on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
+    on(x->@set_preferences!("cb_morphclose"=>x), cb_morphclose.checked)
+    on(x->@set_preferences!("tb_strelclose"=>x), tb_strelclose.stored_string)
+    on(x->@set_preferences!("cb_morphopen"=>x), cb_morphopen.checked)
+    on(x->@set_preferences!("tb_strelopen"=>x), tb_strelopen.stored_string)
 
     notify(freqs)
     notify(cumpowers1)

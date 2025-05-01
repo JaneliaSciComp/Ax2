@@ -346,6 +346,7 @@ function gui(datapath)
     notify(cumpowers1)
     notify(cumpowers2)
     notify(y_clip)
+    notify(nffts)
     display(fig)
 end
 

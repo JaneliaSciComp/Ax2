@@ -62,6 +62,7 @@ pref_defaults = (;
     cb_power = true,
     to = true,
     tb_nfft = "512",
+    cb_tooltips = false,
     )
 
 function gui(datapath)
@@ -78,6 +79,7 @@ function gui(datapath)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
     to_pref = @load_preference("to", pref_defaults.to)
     tb_nfft_pref = @load_preference("tb_nfft", pref_defaults.tb_nfft)
+    cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
 
     hz2khz = 1000
     fs_play = 48_000
@@ -110,6 +112,8 @@ function gui(datapath)
     tb_nfft = Textbox(gl[6,1], stored_string=tb_nfft_pref,
                       validator = s -> all(isdigit(c) || c==',' for c in s))
     bt_play = Button(gl[7,1], label="play")
+    Label(gl[8,1, Top()], "tooltips")
+    cb_tooltips = Checkbox(gl[8,1], checked = cb_tooltips_pref)
 
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
@@ -271,7 +275,11 @@ function gui(datapath)
     freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
     times = @lift tuple($Y_time[$itime][[1,end]]...)
     ax,hm = image(fig[3:4,2], times, freqs, powers;
-                  interpolate=false, alpha=alpha_power, visible=cb_power.checked)
+                  interpolate=false, alpha=alpha_power, visible=cb_power.checked,
+                  inspector_label = (pl,i,pos)->string(
+                          "time = ", pos[1], " sec\n",
+                          "freq = ", pos[2], " Hz\n",
+                          "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
     ax.xlabel[] = "time (s)"
     ax.ylabel[] = "frequency (kHz)"
@@ -294,29 +302,45 @@ function gui(datapath)
                       interpolate=false,
                       colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
                       alpha=alpha_pval,
-                      visible=cb_pval.checked)
+                      visible=cb_pval.checked,
+                      inspector_label = (pl,i,pos)->string(
+                              "time = ", pos[1], " sec\n",
+                              "freq = ", pos[2], " Hz\n",
+                              "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
-    y_clip = @lift view(y[], $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2])
+    iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
+    y_clip = @lift view(y[], $iclip_subsampled)
+    times_yclip = @lift Point2f.(zip($iclip_subsampled ./ $fs, $y_clip))
 
-    ax1, li1 = lines(fig[7,2], y_clip)
+    ax1, li1 = lines(fig[7,2], times_yclip,
+                     inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
+                                                          "amplitude = ", pos[2], " V"))
     ax1.xticklabelsvisible[] = ax1.yticklabelsvisible[] = false
     ax1.ylabel[] = "amplitude"
-    on(yc->limits!(ax1, 1, length(yc), extrema(yc)...), y_clip)
+    onany((yc,ics,fs)->limits!(ax1, ics[1]/fs, ics[end]/fs, extrema(yc)...),
+          y_clip, iclip_subsampled, fs)
 
     cumpowers1 = @lift _cumpower($powers, 1)
-    cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, 1:length($cumpowers1)))
+    cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $Y_freq[$ifreq]))
 
-    ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs)
+    ax2, li2 = lines(fig[3:4,3], cumpowers1_freqs,
+                     inspector_label = (pl,i,pos)->string("freq = ", pos[2], " Hz\n",
+                                                          "power = ", pos[1], " dB"))
     ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
     ax2.xlabel[] = "power"
-    onany(cp->limits!(ax2, extrema(cp)..., 1, length(cp)), cumpowers1)
+    onany((cp,Yf,i)->limits!(ax2, extrema(cp)..., Yf[i[1]], Yf[i[end]]),
+          cumpowers1, Y_freq, ifreq)
 
     cumpowers2 = @lift _cumpower($powers, 2)
+    times_cumpowers2 = @lift Point2f.(zip($Y_time[$itime], $cumpowers2))
 
-    ax3, li3 = lines(fig[2,2], cumpowers2)
+    ax3, li3 = lines(fig[2,2], times_cumpowers2,
+                     inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
+                                                          "power = ", pos[2], " dB"))
     ax3.xticklabelsvisible[] = ax3.yticklabelsvisible[] = false
     ax3.ylabel[] = "power"
-    onany(cp->limits!(ax3, 1, length(cp), extrema(cp)...), cumpowers2)
+    onany((cp,Yt,i)->limits!(ax3, Yt[i[1]], Yt[i[end]], extrema(cp)...),
+          cumpowers2, Y_time, itime)
 
     colsize!(fig.layout, 2, Auto(8))
     colsize!(fig.layout, 3, Auto(1))
@@ -330,6 +354,11 @@ function gui(datapath)
         wavplay(ydown, fs_play)
     end
 
+    for cb in (cb_pval, cb_sigonly, cb_power, cb_tooltips)
+        foreach(x->x.inspectable[]=false, cb.blockscene.plots)
+    end
+    DataInspector(enabled=cb_tooltips.checked)
+
     on(x->@set_preferences!("figsize"=>string(tuple(x.widths...))), fig.scene.viewport)
     on(x->@set_preferences!("isl_freq"=>string(x)), isl_freq.interval)
     on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
@@ -341,6 +370,7 @@ function gui(datapath)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
     on(x->@set_preferences!("to"=>x), to.active)
     on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
+    on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
 
     notify(freqs)
     notify(cumpowers1)

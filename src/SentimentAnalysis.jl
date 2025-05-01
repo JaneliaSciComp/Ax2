@@ -261,9 +261,10 @@ function gui(datapath)
             all(in.(extrema(ifreq), Ref(axes(Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
             Y_scratch = Y_MT[:, ifreq, 1:itime.step:end]
         end
-        q = quantile(Y_scratch, [0.01,0.99])
+        q = quantile(Y_scratch[1:3,:,:], [0.01,0.99])
         f = scaleminmax(N0f8, q...)
         Y_scaled = f.(Y_scratch)
+        Y_scaled[4,:,:] .= 1
         collect(dropdims(reinterpret(RGBA{N0f8}, Y_scaled), dims=1)')
     end
 

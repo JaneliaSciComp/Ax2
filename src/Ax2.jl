@@ -1,54 +1,217 @@
 module Ax2
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
+export app
 
-export gui
+module Model
 
+using WAV, DSP, Multitaper, Memoize, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
+
+fs_play = 48_000
+
+load_recording(wavfile) = wavread(joinpath(datapath, wavfile))
+
+Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
+
+function calculate_spectrograms(y, nffts, fs)
+    Ys = DSP.Periodograms.Spectrogram[]
+    l = ReentrantLock()
+    Threads.@threads for nfft in nffts
+        _Y = get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning),
+                  Ys_cache, nfft)
+        lock(l);  push!(Ys, _Y);  unlock(l)
+    end
+    return Ys
+end
+
+dB = x->20*log10.(power(x))
 overlay(Ys, f) = overlay(f.(Ys))
 function overlay(Ys)
     ntime, nfreq = size.(Ys,2), size.(Ys,1)
     mintime = minimum(round.(Int, maximum(ntime) ./ ntime) .* ntime)
     minfreq = minimum(round.(Int, maximum(nfreq) ./ nfreq) .* nfreq)
-    Y_scratch = zeros(Float32, 4, minfreq, mintime)
+    Y_overlay = zeros(Float32, 4, minfreq, mintime)
     for (icolor, Yi) in enumerate(Ys)
         sz = size(Yi)
         scale = round.(Int, (minfreq, mintime) ./ sz)
         for f0 in 1:scale[1], t0 in 1:scale[2]
             fdelta = sz[1] - length(f0:scale[1]:minfreq)
             tdelta = sz[2] - length(t0:scale[2]:mintime)
-            Y_scratch[icolor,
+            Y_overlay[icolor,
               f0 : scale[1] : end,
               t0 : scale[2] : end] .= Yi[1:end-fdelta, 1:end-tdelta]
         end
     end
-    Y_scratch[4,:,:] .= 1
+    Y_overlay[4,:,:] .= 1
     if length(Ys) == 2
-        Y_scratch[3,:,:] .= Y_scratch[2,:,:]
-        Y_scratch[2,:,:] .= Y_scratch[1,:,:]
+        Y_overlay[3,:,:] .= Y_overlay[2,:,:]
+        Y_overlay[2,:,:] .= Y_overlay[1,:,:]
     elseif length(Ys) == 1
-        Y_scratch[2,:,:] .= Y_scratch[3,:,:] .= Y_scratch[1,:,:]
+        Y_overlay[2,:,:] .= Y_overlay[3,:,:] .= Y_overlay[1,:,:]
     end
-    return Y_scratch
+    return Y_overlay
 end
 
-function multitaper_spectrogram(y, i1, i2, n; fs=1, nw=4.0, k=6, tapers=tapers)
+precompute_tapers(nffts, nw, k) = dpss_tapers.(nffts, nw, k, :tap)
 
+function calculate_multitapers(y, nffts, tapers, iclip, fs, nw, k)
     @memoize LRU(maxsize=1_000_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
             multispec((@view y[idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
 
-    noverlap = div(n, 2)
-    idxs = i1 : n-noverlap : i2+1-n+1
-    mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
-    @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
-        mtspectrum[i] = _multispec(idx, n, nw, k, 1/fs, tapers, true)
+    mtspectrums = []
+    for (nfft, taper) in zip(nffts, tapers)
+        noverlap = div(nfft, 2)
+        idxs = iclip[1] : nfft-noverlap : iclip[2]+1-nfft+1
+        mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
+        @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
+            mtspectrum[i] = _multispec(idx, nfft, nw, k, 1/fs, taper, true)
+        end
+        push!(mtspectrums, mtspectrum)
     end
-    return mtspectrum
+    return mtspectrums
 end
 
-function _cumpower(p,d)
+function coalesce_multitaper_spectrogram(mts)
+    Y_MTs = []
+    for mt in mts
+        p = hcat((x.S for x in mt)...)
+        f = mt[1].f
+        t = (1:length(mt)) * mt[1].params.dt
+        push!(Y_MTs, DSP.Periodograms.Spectrogram(p, f, t))
+    end
+    return Y_MTs
+end
+
+function coalesce_multitaper_ftest(mts)
+    Fs = []
+    for mt in mts
+        push!(Fs, hcat((x.Fpval for x in mt)...))
+    end
+    return Fs
+end
+
+make_strel(t) = strel_box(t)
+
+function refine_ftest(Fs, thresh, sigonly, morphclose, strelclose, morphopen, strelopen, minpix)
+    Y_overlay = overlay(Fs)
+    for j in axes(Y_overlay,2), k in axes(Y_overlay,3)
+        if all(Y_overlay[1:3,j,k] .< thresh)
+            Y_overlay[:,j,k] .= 1
+            Y_overlay[2,j,k] = 0
+        elseif sigonly
+            Y_overlay[:,j,k] .= 0
+            Y_overlay[4,j,k] = 1
+        end
+    end
+    if sigonly
+        if morphclose
+            Y_closed = closing(Y_overlay[1,:,:], strelclose)
+            Y_overlay .= reshape(Y_closed, 1, size(Y_closed)...)
+            Y_overlay[2,:,:] .= 0
+            Y_overlay[4,:,:] .= 1
+        end
+        if morphopen
+            Y_opened = opening(Y_overlay[1,:,:], strelopen)
+            Y_overlay .= reshape(Y_opened, 1, size(Y_opened)...)
+            Y_overlay[2,:,:] .= 0
+            Y_overlay[4,:,:] .= 1
+        end
+        if minpix>0
+            labels = label_components(Y_overlay[1,:,:], trues(3,3))
+            indices = component_indices(labels)
+            for idx in Iterators.filter(x->length(x) < minpix, Iterators.drop(indices, 1))
+                view(Y_overlay, 1,:,:)[idx] .= 0
+                view(Y_overlay, 2,:,:)[idx] .= 0
+                view(Y_overlay, 3,:,:)[idx] .= 0
+            end
+        end
+    end
+    Y_converted = N0f8.(Y_overlay)
+    dropdims(collect(reinterpret(RGBA{N0f8}, Y_converted)), dims=1)
+end
+
+function scale_and_color(Y_overlay)
+    q = quantile(Y_overlay[1:3,:,:], [0.01,0.99])
+    f = scaleminmax(N0f8, q...)
+    Y_scaled = f.(Y_overlay)
+    Y_scaled[4,:,:] .= 1
+    collect(dropdims(reinterpret(RGBA{N0f8}, Y_scaled), dims=1)')
+end
+
+function cumpower(p,d)
     x = dropdims(sum(p, dims=d), dims=d)
     @. red(x) + green(x) + blue(x)
 end
+
+function play(y, iclip, fs)
+    yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
+                     y[iclip[1]:iclip[2], 1])
+    ydown = resample(yfilt, fs_play/fs)
+    wavplay(ydown, fs_play)
+end
+
+function get_components(F, Y_freq, ifreq, Y_time, itime)
+    labels = label_components(F, trues(3,3))
+    indices = component_indices(CartesianIndex, labels)
+    data = Matrix{Float64}(undef, length(indices)-2, 4)
+    for (i,idx) in Iterators.drop(enumerate(indices), 2)
+        bb = extrema(idx)
+        lo, hi = Y_freq[ifreq][[bb[1].I[1], bb[2].I[1]]]
+        start, stop = Y_time[itime][[bb[1].I[2], bb[2].I[2]]]
+        data[i-2,:] .= (start, stop, lo, hi)
+    end
+    return data
+end
+
+function save_csv(filename, F, Y_freq, ifreq, Y_time, itime)
+    data = get_components(F, Y_freq, ifreq, Y_time, itime)
+    writedlm(filename, ["start (sec)" "stop (sec)" "low (Hz)" "high (Hz)"; data], ',')
+end
+
+function save_hdf(filename, F, Y_freq, ifreq, Y_time, itime)
+    data = get_components(F, Y_freq, ifreq, Y_time, itime)
+    fid = h5open(filename, "w")
+    @write fid data
+    HDF5.attributes(fid["data"])["header"] = "start (sec), stop (sec), low (Hz), high (Hz)"
+    close(fid)
+end
+
+function init(_datapath)
+    global datapath, wavfiles
+    datapath = _datapath
+    wavfiles = filter(endswith(".wav"), readdir(_datapath))
+end
+
+end # module Model
+
+
+module View
+
+using ..Model, GLMakie, Preferences, Colors, FixedPointNumbers
+import ..Model as M
+
+@kwdef struct Widgets
+    fig; m;
+    cb_power; to; tb_nfft; cb_pval; tb_nwk; tb_thresh; cb_sigonly;
+    cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix;
+    isl_freq;
+    bt_left_big_center; bt_left_small_center; bt_right_small_center; bt_right_big_center;
+    bt_left_big_width; bt_left_small_width; bt_right_small_width; bt_right_big_width;
+    sl_time_center; sl_time_width;
+    lb_status; bt_play; bt_csv; bt_hdf;
+    ax; hm; hm_pvals; ax1; li1; ax2; li2; ax3; li3;
+end
+
+@kwdef struct Observables
+    y; fs; nffts; noverlaps; nw; k; thresh; strelclose; strelopen; minpix;
+    Ys; Y; Y_freq; Y_time; tapers; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
+    alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
+    iclip_subsampled; y_clip; times_yclip;
+    cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
+end
+
+hz2khz = 1000
+display_size = (3000,2000)
+max_width_sec = 10
 
 pref_defaults = (;
     figsize = (640,450),
@@ -71,7 +234,7 @@ pref_defaults = (;
     tb_minpix = "0",
     )
 
-function gui(datapath)
+function init()
     _figsize_pref = @load_preference("figsize", pref_defaults.figsize)
     figsize_pref = typeof(_figsize_pref)<:Tuple ? _figsize_pref : eval(Meta.parse(_figsize_pref))
     _isl_freq_pref = @load_preference("isl_freq", pref_defaults.isl_freq)
@@ -93,23 +256,18 @@ function gui(datapath)
     tb_strelopen_pref = @load_preference("tb_strelopen", pref_defaults.tb_strelopen)
     tb_minpix_pref = @load_preference("tb_minpix", pref_defaults.tb_minpix)
 
-    hz2khz = 1000
-    fs_play = 48_000
-    display_size = (3000,2000)
-    max_width_sec = 60
-
     fig = Figure(size=figsize_pref)
 
-    wavfiles = filter(endswith(".wav"), readdir(datapath))
-    m = Menu(fig[1,1:3], options=wavfiles, default=coalesce(m_pref, wavfiles[1]))
+    m = Menu(fig[1,1:3], options=M.wavfiles, default=coalesce(m_pref, M.wavfiles[1]))
 
-    y_fs_ = @lift wavread(joinpath(datapath, $(m.selection)))
+    y_fs_ = @lift M.load_recording($(m.selection))
     y = @lift $(y_fs_)[1]
     fs = @lift $(y_fs_)[2]
 
     gl_tt = GridLayout(fig[2,3])
     Label(gl_tt[1,1, Bottom()], "tooltips", tellheight=false, tellwidth=false)
-    cb_tooltips = Checkbox(gl_tt[2,1, Top()], checked = cb_tooltips_pref, tellheight=false, tellwidth=false)
+    cb_tooltips = Checkbox(gl_tt[2,1, Top()], checked = cb_tooltips_pref,
+                           tellheight=false, tellwidth=false)
 
     gl_fft = GridLayout(fig[1:3,4])
     Label(gl_fft[1,1, Top()], "power")
@@ -152,27 +310,17 @@ function gui(datapath)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
     k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
     thresh = @lift parse(Float64, $(tb_thresh.stored_string))
-    strelclose = @lift strel_box(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
-    strelopen = @lift strel_box(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
+    strelclose = @lift M.make_strel(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
+    strelopen = @lift M.make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
     minpix = @lift parse(Int, $(tb_minpix.stored_string))
 
-    Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
-    Ys = lift(y, nffts, fs) do y, nffts, fs
-        Ys = DSP.Periodograms.Spectrogram[]
-        l = ReentrantLock()
-        Threads.@threads for nfft in nffts
-            _Y = get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning),
-                      Ys_cache, nfft)
-            lock(l);  push!(Ys, _Y);  unlock(l)
-        end
-        return Ys
-    end
-    Y = @lift overlay($Ys, x->20*log10.(power(x)))
+    Ys = @lift M.calculate_spectrograms($y, $nffts, $fs)
+    Y = @lift M.overlay($Ys, M.dB)
 
-    Y_freq = @lift freq($Ys[argmax($nffts)])
-    Y_time = @lift time($Ys[argmin($nffts)])
+    Y_freq = @lift M.freq($Ys[argmax($nffts)])
+    Y_time = @lift M.time($Ys[argmin($nffts)])
 
-    tapers = @lift dpss_tapers.($nffts, $nw, $k, :tap)
+    tapers = @lift M.precompute_tapers($nffts, $nw, $k)
 
     isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
@@ -217,25 +365,7 @@ function gui(datapath)
     gl_out = GridLayout(fig[6,3:4], tellheight=false, tellwidth=false)
 
     bt_play = Button(gl_out[1,1], label="play")
-    on(bt_play.clicks) do _
-        yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
-                         y[][iclip[][1]:iclip[][2], 1])
-        ydown = resample(yfilt, fs_play/fs[])
-        wavplay(ydown, fs_play)
-    end
-
-    function get_components()
-        labels = label_components(F[], trues(3,3))
-        indices = component_indices(CartesianIndex, labels)
-        data = Matrix{Float64}(undef, length(indices)-1, 4)
-        for (i,idx) in Iterators.drop(enumerate(indices), 1)
-            bb = extrema(idx)
-            lo, hi = Y_freq[][ifreq[]][[bb[1].I[1], bb[2].I[1]]]
-            start, stop = Y_time[][itime[]][[bb[1].I[2], bb[2].I[2]]]
-            data[i-1,:] .= (start, stop, lo, hi)
-        end
-        return data
-    end
+    on(_->M.play(y[], iclip[], fs[]), bt_play.clicks)
 
     bt_csv = Button(gl_out[1,2], label="CSV")
     on(bt_csv.clicks) do _
@@ -243,10 +373,9 @@ function gui(datapath)
             lb_status.text[] = "p-val and sig. only must both be checked to output CSV"
             return
         end
-        data = get_components()
-        fn = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
-        writedlm(fn, ["start (sec)" "stop (sec)" "low (Hz)" "high (Hz)"; data], ',')
-        lb_status.text[] = "CSV saved to $fn"
+        filename = joinpath(M.datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
+        M.save_csv(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
+        lb_status.text[] = "CSV saved to $filename"
     end
 
     bt_hdf = Button(gl_out[1,3], label="HDF")
@@ -255,13 +384,9 @@ function gui(datapath)
             lb_status.text[] = "p-val and sig. only must both be checked to output HDF"
             return
         end
-        data = get_components()
-        fn = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
-        fid = h5open(fn, "w")
-        @write fid data
-        HDF5.attributes(fid["data"])["header"] = "start (sec), stop (sec), low (Hz), high (Hz)"
-        close(fid)
-        lb_status.text[] = "HDF saved to $fn"
+        filename = joinpath(M.datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
+        M.save_hdf(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
+        lb_status.text[] = "HDF saved to $filename"
     end
 
     # indices into Y
@@ -285,83 +410,36 @@ function gui(datapath)
         (max(1, frac2tic(c-w)), min(length(y), frac2tic(c+w)))
     end
 
-    mtspectrums = lift(y, to.active, cb_pval.checked, fs, nw, k, tapers, iclip, nffts) do y, to, pval, fs, nw, k, tapers, iclip, nffts
-        if !to || pval
-            mtspectrums = []
-            for (nfft, taper) in zip(nffts, tapers)
-                push!(mtspectrums, multitaper_spectrogram(y, iclip..., nfft;
-                                                          fs=fs, nw=nw, k=k, tapers=taper))
-            end
-            return mtspectrums
+    mtspectrums = @lift begin
+        if !$(to.active) || $(cb_pval.checked)
+            M.calculate_multitapers($y, $nffts, $tapers, $iclip, $fs, $nw, $k)
         else
-            fill(Vector{MTSpectrum}(undef, 0), 0)
+            fill(Vector{M.MTSpectrum}(undef, 0), 0)
         end
     end
 
-    Y_MTs = lift(mtspectrums, to.active) do mts, to
-        if !to
-            Y_MTs = []
-            for mt in mts
-                p = hcat((x.S for x in mt)...)
-                f = mt[1].f
-                t = (1:length(mt)) * mt[1].params.dt
-                push!(Y_MTs, DSP.Periodograms.Spectrogram(p, f, t))
-            end
-            return Y_MTs
+    Y_MTs = @lift begin
+        if !$(to.active)
+            M.coalesce_multitaper_spectrogram($mtspectrums)
         else
-            fill(DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
+            fill(M.DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = @lift $(to.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs, x->20*log10.(power(x)))
+    Y_MT = @lift $(to.active) ? Array{Float32}(undef, 0, 0, 0) : M.overlay($Y_MTs, M.dB)
 
-    Fs = lift(mtspectrums, cb_pval.checked) do mts, pval
-        if pval
-            Fs = []
-            for mt in mts
-                push!(Fs, hcat((x.Fpval for x in mt)...))
-            end
-            return Fs
+    Fs = @lift begin
+        if $(cb_pval.checked)
+            M.coalesce_multitaper_ftest($mtspectrums)
         else
             fill(Matrix{Float64}(undef, 0, 0), 0)
         end
     end
     F = @lift begin
         if $(cb_pval.checked)
-            Y_scratch = overlay($Fs)
-            for j in axes(Y_scratch,2), k in axes(Y_scratch,3)
-                if all(Y_scratch[1:3,j,k] .< $thresh)
-                    Y_scratch[:,j,k] .= 1
-                    Y_scratch[2,j,k] = 0
-                elseif $(cb_sigonly.checked)
-                    Y_scratch[:,j,k] .= 0
-                    Y_scratch[4,j,k] = 1
-                end
-            end
-            if $(cb_sigonly.checked)
-                if $(cb_morphclose.checked)
-                    Y_closed = closing(Y_scratch[1,:,:], $strelclose)
-                    Y_scratch .= reshape(Y_closed, 1, size(Y_closed)...)
-                    Y_scratch[2,:,:] .= 0
-                    Y_scratch[4,:,:] .= 1
-                end
-                if $(cb_morphopen.checked)
-                    Y_opened = opening(Y_scratch[1,:,:], $strelopen)
-                    Y_scratch .= reshape(Y_opened, 1, size(Y_opened)...)
-                    Y_scratch[2,:,:] .= 0
-                    Y_scratch[4,:,:] .= 1
-                end
-                if $(minpix)>0
-                    labels = label_components(Y_scratch[1,:,:], trues(3,3))
-                    indices = component_indices(labels)
-                    for idx in Iterators.filter(x->length(x) < $minpix, Iterators.drop(indices, 1))
-                        view(Y_scratch, 1,:,:)[idx] .= 0
-                        view(Y_scratch, 2,:,:)[idx] .= 0
-                        view(Y_scratch, 3,:,:)[idx] .= 0
-                    end
-                end
-            end
-            Y_scaled = N0f8.(Y_scratch)
-            dropdims(collect(reinterpret(RGBA{N0f8}, Y_scaled)), dims=1)
+            M.refine_ftest($Fs, $thresh, $(cb_sigonly.checked),
+                           $(cb_morphclose.checked), $strelclose,
+                           $(cb_morphopen.checked), $strelopen,
+                           $minpix)
         else
             Matrix{RGBA{N0f8}}(undef, 0, 0)
         end
@@ -370,20 +448,16 @@ function gui(datapath)
     alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
     alpha_pval = @lift $(cb_pval.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
-    powers = lift(to.active, Y, itime, ifreq, Y_MT) do to, Y, itime, ifreq, Y_MT
-        if to
-            all(in.(extrema(itime), Ref(axes(Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
-            all(in.(extrema(ifreq), Ref(axes(Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
-            Y_scratch = Y[:,ifreq,itime]
+    powers = @lift begin
+        if $(to.active)
+            all(in.(extrema($itime), Ref(axes($Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
+            all(in.(extrema($ifreq), Ref(axes($Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
+            Y_scratch = $Y[:,$ifreq,$itime]
         else
-            all(in.(extrema(ifreq), Ref(axes(Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
-            Y_scratch = Y_MT[:, ifreq, 1:itime.step:end]
+            all(in.(extrema($ifreq), Ref(axes($Y_MT,2)))) || return RGBA{N0f8}[1 0; 0 0]
+            Y_scratch = $Y_MT[:, $ifreq, 1:$itime.step:end]
         end
-        q = quantile(Y_scratch[1:3,:,:], [0.01,0.99])
-        f = scaleminmax(N0f8, q...)
-        Y_scaled = f.(Y_scratch)
-        Y_scaled[4,:,:] .= 1
-        collect(dropdims(reinterpret(RGBA{N0f8}, Y_scaled), dims=1)')
+        M.scale_and_color(Y_scratch)
     end
 
     freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
@@ -403,10 +477,10 @@ function gui(datapath)
 
     freqs_mt = @lift $(cb_pval.checked) ? $freqs : tuple(0.,0.)
     times_mt = @lift $(cb_pval.checked) ? $times : tuple(0.,0.)
-    pvals = lift(cb_pval.checked, F, itime, ifreq) do pval, F, itime, ifreq
-        if pval
-            all(in.(extrema(ifreq), Ref(axes(F,1)))) || return RGBA{N0f8}[1 0; 0 0]
-            F'[1:itime.step:end, ifreq]
+    pvals = @lift begin
+        if $(cb_pval.checked)
+            all(in.(extrema($ifreq), Ref(axes($F,1)))) || return RGBA{N0f8}[1 0; 0 0]
+            $F'[1:$itime.step:end, $ifreq]
         else
             Matrix{RGBA{N0f8}}(undef, 1, 1)
         end
@@ -434,7 +508,7 @@ function gui(datapath)
     onany((yc,ics,fs)->limits!(ax1, ics[1]/fs, ics[end]/fs, extrema(yc)...),
           y_clip, iclip_subsampled, fs)
 
-    cumpowers1 = @lift _cumpower($powers, 1)
+    cumpowers1 = @lift M.cumpower($powers, 1)
     cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $Y_freq[$ifreq]))
 
     ax2, li2 = lines(fig[3,3], cumpowers1_freqs,
@@ -445,7 +519,7 @@ function gui(datapath)
     onany((cp,Yf,i)->limits!(ax2, extrema(cp)..., Yf[i[1]], Yf[i[end]]),
           cumpowers1, Y_freq, ifreq)
 
-    cumpowers2 = @lift _cumpower($powers, 2)
+    cumpowers2 = @lift M.cumpower($powers, 2)
     times_cumpowers2 = @lift Point2f.(zip($Y_time[$itime], $cumpowers2))
 
     ax3, li3 = lines(fig[2,2], times_cumpowers2,
@@ -499,12 +573,44 @@ function gui(datapath)
     on(x->@set_preferences!("tb_strelopen"=>x), tb_strelopen.stored_string)
     on(x->@set_preferences!("tb_minpix"=>x), tb_minpix.stored_string)
 
-    notify(freqs)
-    notify(cumpowers1)
-    notify(cumpowers2)
-    notify(y_clip)
-    notify(nffts)
-    display(fig)
+    widgets = Widgets(
+        fig, m,
+        cb_power, to, tb_nfft, cb_pval, tb_nwk, tb_thresh, cb_sigonly,
+        cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix,
+        isl_freq,
+        bt_left_big_center, bt_left_small_center, bt_right_small_center, bt_right_big_center,
+        bt_left_big_width, bt_left_small_width, bt_right_small_width, bt_right_big_width,
+        sl_time_center, sl_time_width,
+        lb_status, bt_play, bt_csv, bt_hdf,
+        ax, hm, hm_pvals, ax1, li1, ax2, li2, ax3, li3
+        )
+
+    observables = Observables(
+        y, fs, nffts, noverlaps, nw, k, thresh, strelclose, strelopen, minpix,
+        Ys, Y, Y_freq, Y_time, tapers, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
+        alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
+        iclip_subsampled, y_clip, times_yclip,
+        cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,
+        )
+
+    return widgets, observables
+end
+
+end # module View
+
+
+using .Model, .View
+
+function app(datapath)
+    Model.init(datapath)
+    widgets, observables = View.init()
+    notify(observables.freqs)
+    notify(observables.cumpowers1)
+    notify(observables.cumpowers2)
+    notify(observables.y_clip)
+    notify(observables.nffts)
+    display(widgets.fig)
+    return widgets, observables
 end
 
 end # module Ax2

@@ -1,6 +1,6 @@
 module Ax2
 
-using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology
+using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
 
 export gui
 
@@ -212,13 +212,56 @@ function gui(datapath)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*1.5),
        bt_right_big_width.clicks)
 
-    bt_play = Button(fig[6,3], label="play", tellheight=false, tellwidth=false)
+    lb_status = Label(fig[7,1:4], " ")
 
-    onany(bt_play.clicks) do _
+    gl_out = GridLayout(fig[6,3:4], tellheight=false, tellwidth=false)
+
+    bt_play = Button(gl_out[1,1], label="play")
+    on(bt_play.clicks) do _
         yfilt = filtfilt(digitalfilter(Lowpass(fs_play/2/fs[]), Butterworth(4)),
                          y[][iclip[][1]:iclip[][2], 1])
         ydown = resample(yfilt, fs_play/fs[])
         wavplay(ydown, fs_play)
+    end
+
+    function get_components()
+        labels = label_components(F[], trues(3,3))
+        indices = component_indices(CartesianIndex, labels)
+        data = Matrix{Float64}(undef, length(indices)-1, 4)
+        for (i,idx) in Iterators.drop(enumerate(indices), 1)
+            bb = extrema(idx)
+            lo, hi = Y_freq[][ifreq[]][[bb[1].I[1], bb[2].I[1]]]
+            start, stop = Y_time[][itime[]][[bb[1].I[2], bb[2].I[2]]]
+            data[i-1,:] .= (start, stop, lo, hi)
+        end
+        return data
+    end
+
+    bt_csv = Button(gl_out[1,2], label="CSV")
+    on(bt_csv.clicks) do _
+        if !cb_pval.checked[] || !cb_sigonly.checked[]
+            lb_status.text[] = "p-val and sig. only must both be checked to output CSV"
+            return
+        end
+        data = get_components()
+        fn = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
+        writedlm(fn, ["start (sec)" "stop (sec)" "low (Hz)" "high (Hz)"; data], ',')
+        lb_status.text[] = "CSV saved to $fn"
+    end
+
+    bt_hdf = Button(gl_out[1,3], label="HDF")
+    on(bt_hdf.clicks) do _
+        if !cb_pval.checked[] || !cb_sigonly.checked[]
+            lb_status.text[] = "p-val and sig. only must both be checked to output HDF"
+            return
+        end
+        data = get_components()
+        fn = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
+        fid = h5open(fn, "w")
+        @write fid data
+        HDF5.attributes(fid["data"])["header"] = "start (sec), stop (sec), low (Hz), high (Hz)"
+        close(fid)
+        lb_status.text[] = "HDF saved to $fn"
     end
 
     # indices into Y

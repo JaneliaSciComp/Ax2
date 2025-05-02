@@ -1,4 +1,4 @@
-module SentimentAnalysis
+module Ax2
 
 using WAV, DSP, GLMakie, Multitaper, Memoize, LRUCache, Preferences, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology
 
@@ -464,4 +464,4 @@ function gui(datapath)
     display(fig)
 end
 
-end # module SentimentAnalysis
+end # module Ax2

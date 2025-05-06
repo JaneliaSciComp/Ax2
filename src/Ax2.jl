@@ -63,8 +63,11 @@ function precompute_configs(nffts, nw, k, fs)
 end
 
 function calculate_multitaper_spectrograms(y, nffts, configs, iclip)
-    @memoize LRU(maxsize=1_000_000) _mt_pgram(idx, nfft, config) =
-            mt_pgram((@view y[idx:idx+nfft-1]), config)
+    @memoize LRU(maxsize=1_000_000) function _mt_pgram(idx, nfft, config)
+        _y = y[idx:idx+nfft-1]
+        _y .-= mean(_y)
+        mt_pgram(_y, config)
+    end
 
     mtspectrums = []
     for nfft in nffts

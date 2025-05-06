@@ -4,7 +4,7 @@ export app
 
 module Model
 
-using WAV, DSP, Memoize, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
+using WAV, DSP, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
 
 fs_play = 48_000
 
@@ -60,7 +60,7 @@ function precompute_configs(nffts, nw, k, fs)
 end
 
 function calculate_multitaper_spectrograms(y, nffts, configs, iclip)
-    @memoize LRU(maxsize=1_000_000) function _mt_pgram(idx, nfft, config)
+    function _mt_pgram(idx, nfft, config)
         _y = y[idx:idx+nfft-1]
         _y .-= mean(_y)
         mt_pgram(_y, config)

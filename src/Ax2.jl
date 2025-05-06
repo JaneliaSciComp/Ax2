@@ -4,7 +4,7 @@ export app
 
 module Model
 
-using WAV, DSP, Multitaper, Memoize, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
+using WAV, DSP, Memoize, LRUCache, ProgressMeter, Colors, Statistics, ImageCore, ImageMorphology, DelimitedFiles, HDF5
 
 fs_play = 48_000
 
@@ -12,7 +12,7 @@ load_recording(wavfile) = wavread(joinpath(datapath, wavfile))
 
 Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
 
-function calculate_spectrograms(y, nffts, fs)
+function calculate_hanning_spectrograms(y, nffts, fs)
     Ys = DSP.Periodograms.Spectrogram[]
     l = ReentrantLock()
     Threads.@threads for nfft in nffts
@@ -51,32 +51,51 @@ function overlay(Ys)
     return Y_overlay
 end
 
-precompute_tapers(nffts, nw, k) = dpss_tapers.(nffts, nw, k, :tap)
+function precompute_configs(nffts, nw, k, fs)
+    configs = Dict{eltype(nffts),Channel{MTConfig{Float64}}}()
+    for nfft in nffts
+        configs[nfft] = Channel{MTConfig{Float64}}(Threads.nthreads())
+        foreach(1:Threads.nthreads()) do _
+            put!(configs[nfft], MTConfig{Float64}(nfft; ftest=true, nw=nw, ntapers=k, fs=fs))
+        end
+    end
+    return configs
+end
 
-function calculate_multitapers(y, nffts, tapers, iclip, fs, nw, k)
-    @memoize LRU(maxsize=1_000_000) _multispec(idx, n, NW, K, dt, dpVec, Ftest) =
-            multispec((@view y[idx:idx+n-1]), NW=NW, K=K, dt=dt, dpVec=dpVec, Ftest=Ftest)
+function calculate_multitaper_spectrograms(y, nffts, configs, iclip)
+    @memoize LRU(maxsize=1_000_000) _mt_pgram(idx, nfft, config) =
+            mt_pgram((@view y[idx:idx+nfft-1]), config)
 
     mtspectrums = []
-    for (nfft, taper) in zip(nffts, tapers)
+    for nfft in nffts
         noverlap = div(nfft, 2)
         idxs = iclip[1] : nfft-noverlap : iclip[2]+1-nfft+1
-        mtspectrum = Vector{MTSpectrum}(undef, length(idxs))
-        @showprogress dt=1 Threads.@threads :greedy for (i,idx) in enumerate(idxs)
-            mtspectrum[i] = _multispec(idx, nfft, nw, k, 1/fs, taper, true)
+        mtspectrum = Vector{Periodograms.PeriodogramF}(undef, length(idxs))
+        i_idxs = Channel() do chnl
+            foreach(i_idx->put!(chnl,i_idx), enumerate(idxs))
         end
+        p = Progress(length(idxs))
+        @sync for _ in 1:Threads.nthreads()
+            Threads.@spawn begin
+                config = take!(configs[nfft])
+                for (i,idx) in i_idxs
+                    mtspectrum[i] = _mt_pgram(idx, nfft, config)
+                    next!(p)
+                end
+                put!(configs[nfft], config)
+            end
+        end
+        finish!(p)
         push!(mtspectrums, mtspectrum)
     end
     return mtspectrums
 end
 
-function coalesce_multitaper_spectrogram(mts)
+function coalesce_multitaper_power(mts)
     Y_MTs = []
     for mt in mts
-        p = hcat((x.S for x in mt)...)
-        f = mt[1].f
-        t = (1:length(mt)) * mt[1].params.dt
-        push!(Y_MTs, DSP.Periodograms.Spectrogram(p, f, t))
+        p = hcat((power(x) for x in mt)...)
+        push!(Y_MTs, DSP.Periodograms.Spectrogram(p, 0:0., 0:0.))
     end
     return Y_MTs
 end
@@ -84,7 +103,7 @@ end
 function coalesce_multitaper_ftest(mts)
     Fs = []
     for mt in mts
-        push!(Fs, hcat((x.Fpval for x in mt)...))
+        push!(Fs, hcat((Fpval(x) for x in mt)...))
     end
     return Fs
 end
@@ -203,7 +222,7 @@ end
 
 @kwdef struct Observables
     y; fs; nffts; noverlaps; nw; k; thresh; strelclose; strelopen; minpix;
-    Ys; Y; Y_freq; Y_time; tapers; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
+    Ys; Y; Y_freq; Y_time; configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
@@ -314,13 +333,13 @@ function init()
     strelopen = @lift M.make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
     minpix = @lift parse(Int, $(tb_minpix.stored_string))
 
-    Ys = @lift M.calculate_spectrograms($y, $nffts, $fs)
+    Ys = @lift M.calculate_hanning_spectrograms($y, $nffts, $fs)
     Y = @lift M.overlay($Ys, M.dB)
 
     Y_freq = @lift M.freq($Ys[argmax($nffts)])
     Y_time = @lift M.time($Ys[argmin($nffts)])
 
-    tapers = @lift M.precompute_tapers($nffts, $nw, $k)
+    configs = @lift M.precompute_configs($nffts, $nw, $k, $fs)
 
     isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
@@ -412,15 +431,15 @@ function init()
 
     mtspectrums = @lift begin
         if !$(to.active) || $(cb_pval.checked)
-            M.calculate_multitapers($y, $nffts, $tapers, $iclip, $fs, $nw, $k)
+            M.calculate_multitaper_spectrograms($y, $nffts, $configs, $iclip)
         else
-            fill(Vector{M.MTSpectrum}(undef, 0), 0)
+            fill(Vector{M.Periodograms.PeriodogramF}(undef, 0), 0)
         end
     end
 
     Y_MTs = @lift begin
         if !$(to.active)
-            M.coalesce_multitaper_spectrogram($mtspectrums)
+            M.coalesce_multitaper_power($mtspectrums)
         else
             fill(M.DSP.Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
@@ -587,7 +606,7 @@ function init()
 
     observables = Observables(
         y, fs, nffts, noverlaps, nw, k, thresh, strelclose, strelopen, minpix,
-        Ys, Y, Y_freq, Y_time, tapers, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
+        Ys, Y, Y_freq, Y_time, configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
         iclip_subsampled, y_clip, times_yclip,
         cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,

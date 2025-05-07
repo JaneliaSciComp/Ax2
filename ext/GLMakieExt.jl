@@ -3,8 +3,8 @@ module GLMakieExt
 using Ax2, GLMakie, Preferences, Colors, FixedPointNumbers
 
 @kwdef struct Widgets
-    fig; m;
-    cb_power; to; tb_nfft; cb_pval; tb_nwk; tb_thresh; cb_sigonly;
+    fig; me_wav;
+    cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_pval; cb_sigonly;
     cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix;
     isl_freq;
     bt_left_big_center; bt_left_small_center; bt_right_small_center; bt_right_big_center;
@@ -15,8 +15,12 @@ using Ax2, GLMakie, Preferences, Colors, FixedPointNumbers
 end
 
 @kwdef struct Observables
-    y; fs; nffts; noverlaps; nw; k; thresh; strelclose; strelopen; minpix;
+    y; fs; nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
     Ys; Y; Y_freq; Y_time; configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
+    y; fs; hits; misses; false_alarms;
+    nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
+    Ys; Y; Y_freq; Y_time; coarse2fine;
+    ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
@@ -31,14 +35,14 @@ pref_defaults = (;
     isl_freq = missing,
     sl_time_center = 0,
     sl_time_width = missing,
-    m = missing,
+    me_wav = missing,
     cb_tooltips = false,
     cb_power = true,
-    to = true,
+    to_window = true,
     tb_nfft = "512",
-    cb_pval = false,
+    cb_ftest = false,
     tb_nwk = "4,6",
-    tb_thresh = "0.01",
+    tb_pval = "0.01",
     cb_sigonly = false,
     cb_morphclose = false,
     cb_morphopen = false,
@@ -54,14 +58,14 @@ function init()
     isl_freq_pref = ismissing(_isl_freq_pref) ? _isl_freq_pref : eval(Meta.parse(_isl_freq_pref))
     sl_time_center_pref = @load_preference("sl_time_center", pref_defaults.sl_time_center)
     sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
-    m_pref = @load_preference("m", pref_defaults.m)
+    me_wav_pref = @load_preference("me_wav", pref_defaults.me_wav)
     cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
-    to_pref = @load_preference("to", pref_defaults.to)
+    to_window_pref = @load_preference("to_window", pref_defaults.to_window)
     tb_nfft_pref = @load_preference("tb_nfft", pref_defaults.tb_nfft)
-    cb_pval_pref = @load_preference("cb_pval", pref_defaults.cb_pval)
+    cb_ftest_pref = @load_preference("cb_ftest", pref_defaults.cb_ftest)
     tb_nwk_pref = @load_preference("tb_nwk", pref_defaults.tb_nwk)
-    tb_thresh_pref = @load_preference("tb_thresh", pref_defaults.tb_thresh)
+    tb_pval_pref = @load_preference("tb_pval", pref_defaults.tb_pval)
     cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
     cb_morphclose_pref = @load_preference("cb_morphclose", pref_defaults.cb_morphclose)
     tb_strelclose_pref = @load_preference("tb_strelclose", pref_defaults.tb_strelclose)
@@ -71,9 +75,9 @@ function init()
 
     fig = Figure(size=figsize_pref)
 
-    m = Menu(fig[1,1:3], options=wavfiles, default=coalesce(m_pref, wavfiles[1]))
+    me_wav = Menu(fig[1,1:3], options=wavfiles, default=coalesce(me_wav_pref, wavfiles[1]))
 
-    y_fs_ = @lift load_recording(joinpath(datapath, $(m.selection)))
+    y_fs_ = @lift load_recording(joinpath(datapath, $(me_wav.selection)))
     y = @lift $(y_fs_)[1]
     fs = @lift $(y_fs_)[2]
 
@@ -87,18 +91,18 @@ function init()
     cb_power = Checkbox(gl_fft[1,1], checked = cb_power_pref)
     Label(gl_fft[2,1, Top()], "Hanning")
     Label(gl_fft[2,1, Bottom()], "Slepian")
-    to = Toggle(gl_fft[2,1], active=to_pref, orientation=:vertical)
+    to_window = Toggle(gl_fft[2,1], active=to_window_pref, orientation=:vertical)
     Label(gl_fft[3,1,Top()], "nfft")
     tb_nfft = Textbox(gl_fft[3,1], stored_string=tb_nfft_pref,
                       validator = s -> all(isdigit(c) || c==',' for c in s))
 
-    Label(gl_fft[4,1, Top()], "p-val")
-    cb_pval = Checkbox(gl_fft[4,1], checked = cb_pval_pref)
+    Label(gl_fft[4,1, Top()], "F-test")
+    cb_ftest = Checkbox(gl_fft[4,1], checked = cb_ftest_pref)
     Label(gl_fft[5,1,Top()], "NW,K")
     tb_nwk = Textbox(gl_fft[5,1], stored_string=tb_nwk_pref,
                      validator = s -> all(isdigit(c) || in(c,".,") for c in s))
-    Label(gl_fft[6,1,Top()], "threshold")
-    tb_thresh = Textbox(gl_fft[6,1], stored_string=tb_thresh_pref, validator=Float64)
+    Label(gl_fft[6,1,Top()], "p-val")
+    tb_pval = Textbox(gl_fft[6,1], stored_string=tb_pval_pref, validator=Float64)
     Label(gl_fft[7,1, Top()], "sig. only")
     cb_sigonly = Checkbox(gl_fft[7,1], checked = cb_sigonly_pref)
 
@@ -122,7 +126,7 @@ function init()
     noverlaps = @lift div.($nffts, 2)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
     k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
-    thresh = @lift parse(Float64, $(tb_thresh.stored_string))
+    pval = @lift parse(Float64, $(tb_pval.stored_string))
     strelclose = @lift make_strel(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
     strelopen = @lift make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
     minpix = @lift parse(Int, $(tb_minpix.stored_string))
@@ -182,22 +186,22 @@ function init()
 
     bt_csv = Button(gl_out[1,2], label="CSV")
     on(bt_csv.clicks) do _
-        if !cb_pval.checked[] || !cb_sigonly.checked[]
-            lb_status.text[] = "p-val and sig. only must both be checked to output CSV"
+        if !cb_ftest.checked[] || !cb_sigonly.checked[]
+            lb_status.text[] = "F-test and sig. only must both be checked to output CSV"
             return
         end
-        filename = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
+        filename = joinpath(datapath, string(me_wav.selection[], '-', iclip[][1], '-', iclip[][2], ".csv"))
         save_csv(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
         lb_status.text[] = "CSV saved to $filename"
     end
 
     bt_hdf = Button(gl_out[1,3], label="HDF")
     on(bt_hdf.clicks) do _
-        if !cb_pval.checked[] || !cb_sigonly.checked[]
-            lb_status.text[] = "p-val and sig. only must both be checked to output HDF"
+        if !cb_ftest.checked[] || !cb_sigonly.checked[]
+            lb_status.text[] = "F-test and sig. only must both be checked to output HDF"
             return
         end
-        filename = joinpath(datapath, string(m.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
+        filename = joinpath(datapath, string(me_wav.selection[], '-', iclip[][1], '-', iclip[][2], ".hdf"))
         save_hdf(filename, F[], Y_freq[], ifreq[], Y_time[], itime[])
         lb_status.text[] = "HDF saved to $filename"
     end
@@ -224,7 +228,7 @@ function init()
     end
 
     mtspectrums = @lift begin
-        if !$(to.active) || $(cb_pval.checked)
+        if !$(to_window.active) || $(cb_ftest.checked)
             calculate_multitaper_spectrograms($y, $nffts, $configs, $iclip)
         else
             fill(Vector{Periodograms.PeriodogramF}(undef, 0), 0)
@@ -232,24 +236,24 @@ function init()
     end
 
     Y_MTs = @lift begin
-        if !$(to.active)
+        if !$(to_window.active)
             coalesce_multitaper_power($mtspectrums)
         else
             fill(Periodograms.Spectrogram(Matrix{Float64}(undef, 0, 0), 0:0., 0:0.), 0)
         end
     end
-    Y_MT = @lift $(to.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs, dB)
+    Y_MT = @lift $(to_window.active) ? Array{Float32}(undef, 0, 0, 0) : overlay($Y_MTs, dB)
 
     Fs = @lift begin
-        if $(cb_pval.checked)
+        if $(cb_ftest.checked)
             coalesce_multitaper_ftest($mtspectrums)
         else
             fill(Matrix{Float64}(undef, 0, 0), 0)
         end
     end
     F = @lift begin
-        if $(cb_pval.checked)
-            refine_ftest($Fs, $thresh, $(cb_sigonly.checked),
+        if $(cb_ftest.checked)
+            refine_ftest($Fs, $pval, $(cb_sigonly.checked),
                            $(cb_morphclose.checked), $strelclose,
                            $(cb_morphopen.checked), $strelopen,
                            $minpix)
@@ -258,11 +262,11 @@ function init()
         end
     end
 
-    alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_pval.checked) * 0.5
-    alpha_pval = @lift $(cb_pval.checked) * 0.5 + !$(cb_power.checked) * 0.5
+    alpha_power = @lift $(cb_power.checked) * 0.5 + !$(cb_ftest.checked) * 0.5
+    alpha_pval = @lift $(cb_ftest.checked) * 0.5 + !$(cb_power.checked) * 0.5
 
     powers = @lift begin
-        if $(to.active)
+        if $(to_window.active)
             all(in.(extrema($itime), Ref(axes($Y,3)))) || return RGBA{N0f8}[1 0; 0 0]
             all(in.(extrema($ifreq), Ref(axes($Y,2)))) || return RGBA{N0f8}[1 0; 0 0]
             Y_scratch = $Y[:,$ifreq,$itime]
@@ -288,22 +292,22 @@ function init()
         limits!(ax, t..., f...)
     end
 
-    freqs_mt = @lift $(cb_pval.checked) ? $freqs : tuple(0.,0.)
-    times_mt = @lift $(cb_pval.checked) ? $times : tuple(0.,0.)
+    freqs_mt = @lift $(cb_ftest.checked) ? $freqs : tuple(0.,0.)
+    times_mt = @lift $(cb_ftest.checked) ? $times : tuple(0.,0.)
     pvals = @lift begin
-        if $(cb_pval.checked)
+        if $(cb_ftest.checked)
             all(in.(extrema($ifreq), Ref(axes($F,1)))) || return RGBA{N0f8}[1 0; 0 0]
             $F'[1:$itime.step:end, $ifreq]
         else
             Matrix{RGBA{N0f8}}(undef, 1, 1)
         end
     end
-    cr = @lift ($thresh,1)
+    cr = @lift ($pval,1)
     hm_pvals = image!(times_mt, freqs_mt, pvals;
                       interpolate=false,
                       colormap=:grays, colorrange=cr, lowclip=(:fuchsia, 1),
                       alpha=alpha_pval,
-                      visible=cb_pval.checked,
+                      visible=cb_ftest.checked,
                       inspector_label = (pl,i,pos)->string(
                               "time = ", pos[1], " sec\n",
                               "freq = ", pos[2], " Hz\n",
@@ -362,7 +366,7 @@ function init()
              """,
              placement = :left, enabled = cb_tooltips.checked)
 
-    for cb in (cb_tooltips, cb_power, cb_pval, cb_sigonly, cb_morphclose, cb_morphopen)
+    for cb in (cb_tooltips, cb_power, cb_ftest, cb_sigonly, cb_morphclose, cb_morphopen)
         foreach(x->x.inspectable[]=false, cb.blockscene.plots)
     end
     DataInspector(enabled=cb_tooltips.checked)
@@ -371,14 +375,14 @@ function init()
     on(x->@set_preferences!("isl_freq"=>string(x)), isl_freq.interval)
     on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
     on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
-    on(x->@set_preferences!("m"=>x), m.selection)
+    on(x->@set_preferences!("me_wav"=>x), me_wav.selection)
     on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
-    on(x->@set_preferences!("to"=>x), to.active)
+    on(x->@set_preferences!("to_window"=>x), to_window.active)
     on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
-    on(x->@set_preferences!("cb_pval"=>x), cb_pval.checked)
+    on(x->@set_preferences!("cb_ftest"=>x), cb_ftest.checked)
     on(x->@set_preferences!("tb_nwk"=>x), tb_nwk.stored_string)
-    on(x->@set_preferences!("tb_thresh"=>x), tb_thresh.stored_string)
+    on(x->@set_preferences!("tb_pval"=>x), tb_pval.stored_string)
     on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
     on(x->@set_preferences!("cb_morphclose"=>x), cb_morphclose.checked)
     on(x->@set_preferences!("tb_strelclose"=>x), tb_strelclose.stored_string)
@@ -387,8 +391,8 @@ function init()
     on(x->@set_preferences!("tb_minpix"=>x), tb_minpix.stored_string)
 
     widgets = Widgets(
-        fig, m,
-        cb_power, to, tb_nfft, cb_pval, tb_nwk, tb_thresh, cb_sigonly,
+        fig, me_wav,
+        cb_power, to_window, tb_nfft, cb_ftest, tb_nwk, tb_pval, cb_sigonly,
         cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix,
         isl_freq,
         bt_left_big_center, bt_left_small_center, bt_right_small_center, bt_right_big_center,
@@ -399,7 +403,7 @@ function init()
         )
 
     observables = Observables(
-        y, fs, nffts, noverlaps, nw, k, thresh, strelclose, strelopen, minpix,
+        y, fs, nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
         Ys, Y, Y_freq, Y_time, configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
         iclip_subsampled, y_clip, times_yclip,

@@ -353,6 +353,21 @@ function init()
     rowsize!(fig.layout, 3, Auto(4))
     rowsize!(fig.layout, 6, Auto(1))
 
+    tooltip!(me_wav, "choose a recording",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    tooltip!(cb_power, "calculate and display the spectrogram",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(to_window, "toggle between a normal spectrogram and a multitaper one",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_nfft,
+             """
+             short time windows can resolve quickly varying signals better
+             long windows have better spectral resolution
+             """,
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(cb_ftest, "calculate and display the multitaper F-test",
+             placement = :left, enabled = cb_tooltips.checked)
     tooltip!(tb_nwk,
              """
              K is # of tapers
@@ -360,10 +375,52 @@ function init()
              K should be less than 2NW-1
              """,
              placement = :left, enabled = cb_tooltips.checked)
-    tooltip!(tb_nfft,
-             """
-             short time windows can resolve quickly varying signals better
-             """,
+    tooltip!(tb_pval, "the threshold at which to consider the F-test significant",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(cb_sigonly, "display the insignificant pixels in all black",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    tooltip!(cb_morphopen, "fill in small gaps between significant pixels",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_strelopen, "the height and width of the opening structuring element",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(cb_morphclose, "remove isolated significant pixels",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_strelclose, "the height and width of the closing structuring element",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_minpix, "cull connected components with fewer than this many pixels",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    tooltip!(isl_freq, "zoom in on the frequency axis",
+             placement = :right, enabled = cb_tooltips.checked)
+    tooltip!(sl_time_center, "pan on the time axis",
+             placement = :below, enabled = cb_tooltips.checked)
+    tooltip!(sl_time_width, "zoom in on the time axis",
+             placement = :below, enabled = cb_tooltips.checked)
+
+    tooltip!(bt_left_big_center, "pan left by half",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_left_small_center, "pan left by a tenth",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_right_small_center, "pan right by a tenth",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_right_big_center, "pan right by half",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    tooltip!(bt_left_big_width, "zoom in by half",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_left_small_width, "zoom in pan left by a tenth",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_right_small_width, "zoom out by a tenth",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_right_big_width, "zoom out by half",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    tooltip!(bt_play, "listen to the displayed sound",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_csv, "save the displayed vocalizations to a CSV file",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(bt_hdf, "save the displayed vocalizations to an HDF file",
              placement = :left, enabled = cb_tooltips.checked)
 
     for cb in (cb_tooltips, cb_power, cb_ftest, cb_sigonly, cb_morphclose, cb_morphopen)

@@ -283,7 +283,7 @@ function init()
                   interpolate=false, alpha=alpha_power, visible=cb_power.checked,
                   inspector_label = (pl,i,pos)->string(
                           "time = ", pos[1], " sec\n",
-                          "freq = ", pos[2], " Hz\n",
+                          "freq = ", pos[2], " kHz\n",
                           "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
     ax.xlabel[] = "time (s)"
@@ -310,7 +310,7 @@ function init()
                       visible=cb_ftest.checked,
                       inspector_label = (pl,i,pos)->string(
                               "time = ", pos[1], " sec\n",
-                              "freq = ", pos[2], " Hz\n",
+                              "freq = ", pos[2], " kHz\n",
                               "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
     iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
@@ -329,7 +329,7 @@ function init()
     cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $Y_freq[$ifreq]))
 
     ax2, li2 = lines(fig[3,3], cumpowers1_freqs,
-                     inspector_label = (pl,i,pos)->string("freq = ", pos[2], " Hz\n",
+                     inspector_label = (pl,i,pos)->string("freq = ", pos[2], " kHz\n",
                                                           "power = ", pos[1], " dB"))
     ax2.xticklabelsvisible[] = ax2.yticklabelsvisible[] = false
     ax2.xlabel[] = "power"

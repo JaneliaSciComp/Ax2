@@ -1,9 +1,9 @@
 module GLMakieExt
 
-using Ax2, GLMakie, Preferences, Colors, FixedPointNumbers
+using Ax2, GLMakie, DelimitedFiles, Preferences, Colors, FixedPointNumbers, Statistics
 
 @kwdef struct Widgets
-    fig; me_wav;
+    fig; me_wav; me_jump; cb_mistakes;
     cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_pval; cb_sigonly;
     cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix;
     isl_freq;
@@ -11,11 +11,12 @@ using Ax2, GLMakie, Preferences, Colors, FixedPointNumbers
     bt_left_big_width; bt_left_small_width; bt_right_small_width; bt_right_big_width;
     sl_time_center; sl_time_width;
     lb_status; bt_play; bt_csv; bt_hdf;
-    ax; hm; hm_pvals; ax1; li1; ax2; li2; ax3; li3;
+    ax; hm; hm_pvals; l_hit; l_miss; l_fa; ax1; li1; ax2; li2; ax3; li3;
 end
 
 @kwdef struct Observables
-    y; fs; nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
+    y; fs; hits; misses; false_alarms;
+    nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
     Ys; Y; Y_freq; Y_time; configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     y; fs; hits; misses; false_alarms;
     nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
@@ -36,6 +37,8 @@ pref_defaults = (;
     sl_time_center = 0,
     sl_time_width = missing,
     me_wav = missing,
+    me_jump = "time",
+    cb_mistakes = true,
     cb_tooltips = false,
     cb_power = true,
     to_window = true,
@@ -59,6 +62,8 @@ function init()
     sl_time_center_pref = @load_preference("sl_time_center", pref_defaults.sl_time_center)
     sl_time_width_pref = @load_preference("sl_time_width", pref_defaults.sl_time_width)
     me_wav_pref = @load_preference("me_wav", pref_defaults.me_wav)
+    me_jump_pref = @load_preference("me_jump", pref_defaults.me_jump)
+    cb_mistakes_pref = @load_preference("cb_mistakes", pref_defaults.cb_mistakes)
     cb_tooltips_pref = @load_preference("cb_tooltips", pref_defaults.cb_tooltips)
     cb_power_pref = @load_preference("cb_power", pref_defaults.cb_power)
     to_window_pref = @load_preference("to_window", pref_defaults.to_window)
@@ -80,6 +85,21 @@ function init()
     y_fs_ = @lift load_recording(joinpath(datapath, $(me_wav.selection)))
     y = @lift $(y_fs_)[1]
     fs = @lift $(y_fs_)[2]
+
+    hits = @lift begin
+        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-partial-hits.csv"))
+        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
+    end
+
+    misses = @lift begin
+        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-complete-misses.csv"))
+        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
+    end
+
+    false_alarms = @lift begin
+        fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-complete-false-alarms.csv"))
+        isfile(fn) ? readdlm(fn, ',', header=true)[1] : missing
+    end
 
     gl_tt = GridLayout(fig[2,3])
     Label(gl_tt[1,1, Bottom()], "tooltips", tellheight=false, tellwidth=false)
@@ -141,7 +161,7 @@ function init()
 
     isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
-    gl_pan = GridLayout(fig[4,3:4], halign=:left)
+    gl_pan = GridLayout(fig[4,3:5], halign=:left)
     bt_left_big_center = Button(gl_pan[1,1], label="<<")
     bt_left_small_center = Button(gl_pan[1,2], label="<")
     bt_right_small_center = Button(gl_pan[1,3], label=">")
@@ -150,7 +170,10 @@ function init()
     step = (nffts[][1]-noverlaps[][1]) / length(y[])
     sl_time_center = Slider(fig[4,2], range=0:step:1, startvalue=sl_time_center_pref)
 
-    gl_zoom = GridLayout(fig[5,3:4], halign=:left)
+    me_jump = Menu(gl_pan[1,5], options = ["time", "hits", "misses", "FAs"],
+                   default=me_jump_pref, width=70)
+
+    gl_zoom = GridLayout(fig[5,3:5], halign=:left)
     bt_left_big_width = Button(gl_zoom[1,1], label="<<")
     bt_left_small_width = Button(gl_zoom[1,2], label="<")
     bt_right_small_width = Button(gl_zoom[1,3], label=">")
@@ -160,14 +183,74 @@ function init()
     sl_time_width = Slider(fig[5,2], range=0:step:maxvalue,
                            startvalue = coalesce(sl_time_width_pref, maxvalue))
 
-    on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 2),
-       bt_left_big_center.clicks)
-    on(_->set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10),
-       bt_left_small_center.clicks)
-    on(_->set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 10),
-       bt_right_small_center.clicks)
-    on(_->set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 2),
-       bt_right_big_center.clicks)
+    Label(gl_zoom[1,5, Right()], "show hits &\nmistakes")
+    cb_mistakes = Checkbox(gl_zoom[1,5], checked = cb_mistakes_pref)
+
+    function jump(data, fun1, fun2, skip)
+        t = mean(Y_time[][itime[][[1,end]]])
+        i = fun2(x -> fun1(x, t), data[][:,1])
+        isnothing(i) && return
+        i = clamp(i+skip, 1, size(data[],1))
+        data[][i,1] * fs[] / length(y[])
+    end
+
+    on(bt_left_big_center.clicks) do _
+        if me_jump.selection[]=="time"
+            set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 2)
+        elseif me_jump.selection[]=="hits"
+            c = jump(hits, <, findlast, -9)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="misses"
+            c = jump(misses, <, findlast, -9)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="FAs"
+            c = jump(false_alarms, <, findlast, -9)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        end
+    end
+    on(bt_left_small_center.clicks) do _
+        if me_jump.selection[]=="time"
+            set_close_to!(sl_time_center, sl_time_center.value[] - sl_time_width.value[] / 10)
+        elseif me_jump.selection[]=="hits"
+            c = jump(hits, <, findlast, 0)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="misses"
+            c = jump(misses, <, findlast, 0)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="FAs"
+            c = jump(false_alarms, <, findlast, 0)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        end
+    end
+    on(bt_right_small_center.clicks) do _
+        if me_jump.selection[]=="time"
+            set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 10)
+        elseif me_jump.selection[]=="hits"
+            c = jump(hits, >, findfirst, 1)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="misses"
+            c = jump(misses, >, findfirst, 1)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="FAs"
+            c = jump(false_alarms, >, findfirst, 1)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        end
+    end
+    on(bt_right_big_center.clicks) do _
+        if me_jump.selection[]=="time"
+            set_close_to!(sl_time_center, sl_time_center.value[] + sl_time_width.value[] / 2)
+        elseif me_jump.selection[]=="hits"
+            c = jump(hits, >, findfirst, 10)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="misses"
+            c = jump(misses, >, findfirst, 10)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        elseif me_jump.selection[]=="FAs"
+            c = jump(false_alarms, >, findfirst, 10)
+            isnothing(c) || set_close_to!(sl_time_center, c)
+        end
+    end
+
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*0.5),
        bt_left_big_width.clicks)
     on(_->set_close_to!(sl_time_width, sl_time_width.value[]*0.9),
@@ -179,7 +262,7 @@ function init()
 
     lb_status = Label(fig[7,1:4], " ")
 
-    gl_out = GridLayout(fig[6,3:4], tellheight=false, tellwidth=false)
+    gl_out = GridLayout(fig[6,3:5], tellheight=false)
 
     bt_play = Button(gl_out[1,1], label="play")
     on(_->play(y[], iclip[], fs[]), bt_play.clicks)
@@ -313,6 +396,19 @@ function init()
                               "freq = ", pos[2], " kHz\n",
                               "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
+    obs_hit_low = @lift ismissing($hits) ? [1] : $(hits)[:,1]
+    obs_hit_high = @lift ismissing($hits) ? [1] : $(hits)[:,2]
+    l_hit = vspan!(obs_hit_low, obs_hit_high, color = Cycled(2), alpha=0.5,
+                   visible=cb_mistakes.checked)
+    obs_miss_low = @lift ismissing($misses) ? [1] : $(misses)[:,1]
+    obs_miss_high = @lift ismissing($misses) ? [1] : $(misses)[:,2]
+    l_miss = vspan!(obs_miss_low, obs_miss_high, color = Cycled(3), alpha=0.5,
+                    visible=cb_mistakes.checked)
+    obs_fa_low = @lift ismissing($false_alarms) ? [1] : $(false_alarms)[:,1]
+    obs_fa_high = @lift ismissing($false_alarms) ? [1] : $(false_alarms)[:,2]
+    l_fa = vspan!(obs_fa_low, obs_fa_high, color = Cycled(4), alpha=0.5,
+                  visible=cb_mistakes.checked)
+
     iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
     y_clip = @lift view(y[], $iclip_subsampled)
     times_yclip = @lift Point2f.(zip($iclip_subsampled ./ $fs, $y_clip))
@@ -423,7 +519,12 @@ function init()
     tooltip!(bt_hdf, "save the displayed vocalizations to an HDF file",
              placement = :left, enabled = cb_tooltips.checked)
 
-    for cb in (cb_tooltips, cb_power, cb_ftest, cb_sigonly, cb_morphclose, cb_morphopen)
+    tooltip!(me_jump, "pan in time or jump to nearby hits & mistakes",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(cb_mistakes, "show or hide vertical bands indicating hits & mistakes",
+             placement = :left, enabled = cb_tooltips.checked)
+
+    for cb in (cb_tooltips, cb_power, cb_ftest, cb_sigonly, cb_morphclose, cb_morphopen, cb_mistakes)
         foreach(x->x.inspectable[]=false, cb.blockscene.plots)
     end
     DataInspector(enabled=cb_tooltips.checked)
@@ -433,6 +534,8 @@ function init()
     on(x->@set_preferences!("sl_time_center"=>x), sl_time_center.value)
     on(x->@set_preferences!("sl_time_width"=>x), sl_time_width.value)
     on(x->@set_preferences!("me_wav"=>x), me_wav.selection)
+    on(x->@set_preferences!("me_jump"=>x), me_jump.selection)
+    on(x->@set_preferences!("cb_mistakes"=>x), cb_mistakes.checked)
     on(x->@set_preferences!("cb_tooltips"=>x), cb_tooltips.checked)
     on(x->@set_preferences!("cb_power"=>x), cb_power.checked)
     on(x->@set_preferences!("to_window"=>x), to_window.active)
@@ -448,7 +551,7 @@ function init()
     on(x->@set_preferences!("tb_minpix"=>x), tb_minpix.stored_string)
 
     widgets = Widgets(
-        fig, me_wav,
+        fig, me_wav, me_jump, cb_mistakes,
         cb_power, to_window, tb_nfft, cb_ftest, tb_nwk, tb_pval, cb_sigonly,
         cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix,
         isl_freq,
@@ -456,11 +559,12 @@ function init()
         bt_left_big_width, bt_left_small_width, bt_right_small_width, bt_right_big_width,
         sl_time_center, sl_time_width,
         lb_status, bt_play, bt_csv, bt_hdf,
-        ax, hm, hm_pvals, ax1, li1, ax2, li2, ax3, li3
+        ax, hm, hm_pvals, l_hit, l_miss, l_fa, ax1, li1, ax2, li2, ax3, li3
         )
 
     observables = Observables(
-        y, fs, nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
+        y, fs, hits, misses, false_alarms,
+        nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
         Ys, Y, Y_freq, Y_time, configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
         iclip_subsampled, y_clip, times_yclip,
@@ -486,5 +590,3 @@ function Ax2.app(_datapath)
 end
 
 end # module GLMakieExt
-
-

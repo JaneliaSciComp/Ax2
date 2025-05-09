@@ -17,11 +17,8 @@ end
 @kwdef struct Observables
     y; fs; hits; misses; false_alarms;
     nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
-    Ys; Y; Y_freq; Y_time; configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
-    y; fs; hits; misses; false_alarms;
-    nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
     Ys; Y; Y_freq; Y_time; coarse2fine;
-    ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
+    configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
@@ -156,6 +153,7 @@ function init()
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
+    coarse2fine = @lift div(length($Y_time), length(time($Ys[argmax($nffts)])))
 
     configs = @lift precompute_configs($nffts, $nw, $k, $fs)
 
@@ -296,18 +294,19 @@ function init()
         step = max(1, fld(stop-start+1, display_size[2]))
         start:step:stop
     end
-    itime = lift(sl_time_center.value, sl_time_width.value, Y_time) do c, w, Y_time
-        frac2fft(x) = round(Int, x*length(Y_time))
+    itime = @lift begin
+        c, w = $(sl_time_center.value), $(sl_time_width.value)
+        frac2fft(x) = round(Int, x*length($Y_time) / $coarse2fine) * $coarse2fine
         start = max(1, frac2fft(c-w))
         step = max(1, Int(fld(frac2fft(w), display_size[1])))
-        stop = min(length(Y_time), frac2fft(c+w))
+        stop = min(length($Y_time), frac2fft(c+w))
         start:step:stop
     end
 
     # indices into y
-    iclip = lift(sl_time_center.value, sl_time_width.value, y) do c, w, y
-        frac2tic(x) = round(Int, x*length(y))
-        (max(1, frac2tic(c-w)), min(length(y), frac2tic(c+w)))
+    iclip = lift(itime) do itime
+        (Int(Y_time[][itime[1]]*fs[] - minimum(nffts[])/2 + 1),
+         Int(Y_time[][itime[end]]*fs[] + minimum(nffts[])/2))
     end
 
     mtspectrums = @lift begin
@@ -360,8 +359,8 @@ function init()
         scale_and_color(Y_scratch)
     end
 
-    freqs = @lift tuple($Y_freq[$ifreq][[1,end]] ./ hz2khz...)
-    times = @lift tuple($Y_time[$itime][[1,end]]...)
+    freqs = @lift tuple($Y_freq[$ifreq[[1,end]]] ./ hz2khz...)
+    times = @lift tuple($Y_time[$itime[[1,end]]]...)
     ax,hm = image(fig[3,2], times, freqs, powers;
                   interpolate=false, alpha=alpha_power, visible=cb_power.checked,
                   inspector_label = (pl,i,pos)->string(
@@ -375,8 +374,6 @@ function init()
         limits!(ax, t..., f...)
     end
 
-    freqs_mt = @lift $(cb_ftest.checked) ? $freqs : tuple(0.,0.)
-    times_mt = @lift $(cb_ftest.checked) ? $times : tuple(0.,0.)
     pvals = @lift begin
         if $(cb_ftest.checked)
             all(in.(extrema($ifreq), Ref(axes($F,1)))) || return RGBA{N0f8}[1 0; 0 0]
@@ -385,6 +382,8 @@ function init()
             Matrix{RGBA{N0f8}}(undef, 1, 1)
         end
     end
+    freqs_mt = @lift $(cb_ftest.checked) ? $freqs : tuple(0.,0.)
+    times_mt = @lift $(cb_ftest.checked) ? tuple($Y_time[$itime[[1,size($pvals,1)]]]...) : tuple(0.,0.)
     cr = @lift ($pval,1)
     hm_pvals = image!(times_mt, freqs_mt, pvals;
                       interpolate=false,
@@ -565,7 +564,8 @@ function init()
     observables = Observables(
         y, fs, hits, misses, false_alarms,
         nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
-        Ys, Y, Y_freq, Y_time, configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
+        Ys, Y, Y_freq, Y_time, coarse2fine,
+        configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
         iclip_subsampled, y_clip, times_yclip,
         cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,

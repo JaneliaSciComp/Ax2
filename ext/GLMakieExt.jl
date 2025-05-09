@@ -2,6 +2,8 @@ module GLMakieExt
 
 using Ax2, GLMakie, DelimitedFiles, Preferences, Colors, FixedPointNumbers, Statistics
 
+include("block-tooltips.jl")
+
 @kwdef struct Widgets
     fig; me_wav; me_jump; cb_mistakes;
     cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_pval; cb_sigonly;

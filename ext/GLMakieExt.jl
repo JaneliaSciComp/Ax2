@@ -84,7 +84,7 @@ function init()
 
     y_fs_ = @lift load_recording(joinpath(datapath, $(me_wav.selection)))
     y = @lift $(y_fs_)[1]
-    fs = @lift $(y_fs_)[2]
+    fs = @lift Float64($(y_fs_)[2])
 
     hits = @lift begin
         fn = joinpath(datapath, string(splitext($(me_wav.selection))[1], "-partial-hits.csv"))
@@ -411,7 +411,7 @@ function init()
 
     iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
     y_clip = @lift view(y[], $iclip_subsampled)
-    times_yclip = @lift Point2f.(zip($iclip_subsampled ./ $fs, $y_clip))
+    times_yclip = @lift Point2.(zip($iclip_subsampled ./ $fs, $y_clip))
 
     ax1, li1 = lines(fig[6,2], times_yclip,
                      inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",
@@ -422,7 +422,7 @@ function init()
           y_clip, iclip_subsampled, fs)
 
     cumpowers1 = @lift cumpower($powers, 1)
-    cumpowers1_freqs = @lift Point2f.(zip($cumpowers1, $Y_freq[$ifreq]))
+    cumpowers1_freqs = @lift Point2.(zip($cumpowers1, $Y_freq[$ifreq]))
 
     ax2, li2 = lines(fig[3,3], cumpowers1_freqs,
                      inspector_label = (pl,i,pos)->string("freq = ", pos[2], " kHz\n",
@@ -433,7 +433,7 @@ function init()
           cumpowers1, Y_freq, ifreq)
 
     cumpowers2 = @lift cumpower($powers, 2)
-    times_cumpowers2 = @lift Point2f.(zip($Y_time[$itime], $cumpowers2))
+    times_cumpowers2 = @lift Point2.(zip($Y_time[$itime], $cumpowers2))
 
     ax3, li3 = lines(fig[2,2], times_cumpowers2,
                      inspector_label = (pl,i,pos)->string("time = ", pos[1], " sec\n",

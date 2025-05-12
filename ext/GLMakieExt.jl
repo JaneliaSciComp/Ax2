@@ -20,7 +20,7 @@ end
     y; fs; hits; misses; false_alarms;
     nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
     Ys; Y; Y_freq; Y_time; coarse2fine;
-    configs; ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
+    ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
@@ -156,8 +156,6 @@ function init()
     Y_freq = @lift freq($Ys[argmax($nffts)])
     Y_time = @lift time($Ys[argmin($nffts)])
     coarse2fine = @lift div(length($Y_time), length(time($Ys[argmax($nffts)])))
-
-    configs = @lift precompute_configs($nffts, $nw, $k, $fs)
 
     isl_freq = IntervalSlider(fig[3,1], range=0:0.01:1, horizontal=false,
                               startvalues = coalesce(isl_freq_pref, tuple(0, 1)))
@@ -313,7 +311,7 @@ function init()
 
     mtspectrums = @lift begin
         if !$(to_window.active) || $(cb_ftest.checked)
-            calculate_multitaper_spectrograms($y, $nffts, $configs, $iclip)
+            calculate_multitaper_spectrograms($y, $nffts, $nw, $k, $fs, $iclip)
         else
             fill(Vector{Periodograms.PeriodogramF}(undef, 0), 0)
         end
@@ -567,7 +565,7 @@ function init()
         y, fs, hits, misses, false_alarms,
         nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
         Ys, Y, Y_freq, Y_time, coarse2fine,
-        configs, ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
+        ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
         iclip_subsampled, y_clip, times_yclip,
         cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,

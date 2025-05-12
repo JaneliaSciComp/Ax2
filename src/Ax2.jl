@@ -48,18 +48,16 @@ function overlay(Ys)
     return Y_overlay
 end
 
-function precompute_configs(nffts, nw, k, fs)
-    configs = Dict{eltype(nffts),Channel{MTConfig{Float64}}}()
-    for nfft in nffts
-        configs[nfft] = Channel{MTConfig{Float64}}(Threads.nthreads())
-        foreach(1:Threads.nthreads()) do _
-            put!(configs[nfft], MTConfig{Float64}(nfft; ftest=true, nw=nw, ntapers=k, fs=fs))
-        end
+configs = Dict{Int64,Channel{MTConfig{Float64}}}()
+
+function precompute_config(nfft, nw, k, fs)
+    configs[nfft] = Channel{MTConfig{Float64}}(Threads.nthreads())
+    foreach(1:Threads.nthreads()) do _
+        put!(configs[nfft], MTConfig{Float64}(nfft; ftest=true, nw=nw, ntapers=k, fs=fs))
     end
-    return configs
 end
 
-function calculate_multitaper_spectrograms(y, nffts, configs, iclip)
+function calculate_multitaper_spectrograms(y, nffts, nw, k, fs, iclip)
     function _mt_pgram(idx, nfft, config)
         _y = y[idx:idx+nfft-1]
         _y .-= mean(_y)
@@ -68,6 +66,7 @@ function calculate_multitaper_spectrograms(y, nffts, configs, iclip)
 
     mtspectrums = []
     for nfft in nffts
+        haskey(configs, nfft) || precompute_config(nfft, nw, k, fs)
         noverlap = div(nfft, 2)
         idxs = iclip[1] : nfft-noverlap : iclip[2]+1-nfft+1
         mtspectrum = Vector{Periodograms.PeriodogramF}(undef, length(idxs))

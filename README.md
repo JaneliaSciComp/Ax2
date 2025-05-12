@@ -82,9 +82,8 @@ minpix = 10
 
 y, fs = load_recording(<path-to-WAV-file>)
 Ys = calculate_hanning_spectrograms(y, nffts, fs)
-configs = precompute_configs(nffts, nw, k, fs)
 iclip = (1, length(y))
-mtspectrums = calculate_multitaper_spectrograms(vec(y), nffts, configs, iclip)
+mtspectrums = calculate_multitaper_spectrograms(vec(y), nffts, nw, k, fs, iclip)
 Fs = coalesce_multitaper_ftest(mtspectrums)
 F = refine_ftest(Fs, pval, sigonly, morphclose, strelclose, morphopen, strelopen, minpix)
 Y_freq = freq(Ys[argmax(nffts)])

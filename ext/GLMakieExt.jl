@@ -305,8 +305,8 @@ function init()
 
     # indices into y
     iclip = lift(itime) do itime
-        (Int(Y_time[][itime[1]]*fs[] - minimum(nffts[])/2 + 1),
-         Int(Y_time[][itime[end]]*fs[] + minimum(nffts[])/2))
+        (round(Int, Y_time[][itime[1]]*fs[] - minimum(nffts[])/2 + 1),
+         round(Int, Y_time[][itime[end]]*fs[] + minimum(nffts[])/2))
     end
 
     mtspectrums = @lift begin

@@ -100,7 +100,7 @@ function coalesce_multitaper_power(mts)
 end
 
 function coalesce_multitaper_ftest(mts)
-    Fs = []
+    Fs = Matrix{Float64}[]
     for mt in mts
         push!(Fs, hcat((Fpval(x) for x in mt)...))
     end
@@ -109,11 +109,23 @@ end
 
 make_strel(t) = strel_box(t)
 
-function refine_ftest(Fs, thresh, sigonly, morphclose, strelclose, morphopen, strelopen,
+function get_pad(pad, strel, Y, val)
+    if pad
+        padlo = tuple(-[first.(axes(strel))...]...)
+        padhi = last.(axes(strel))
+        Y_padded = padarray(view(Y,1,:,:), Fill(val, padlo, padhi))
+    else
+        padlo = padhi = (0,0)
+        Y_padded = Y[1,:,:]
+    end
+    return Y_padded, [1:1, 1+padlo[1]:size(Y,2)+padlo[1], 1+padlo[2]:size(Y,3)+padlo[2]]
+end
+
+function refine_ftest(Fs, pval, sigonly, morphclose, strelclose, morphopen, strelopen,
                       minpix, pad=true)
     Y_overlay = overlay(Fs)
     for j in axes(Y_overlay,2), k in axes(Y_overlay,3)
-        if all(Y_overlay[1:3,j,k] .< thresh)
+        if all(x->x<pval, view(Y_overlay,1:3,j,k))
             Y_overlay[:,j,k] .= 1
             Y_overlay[2,j,k] = 0
         elseif sigonly
@@ -122,26 +134,15 @@ function refine_ftest(Fs, thresh, sigonly, morphclose, strelclose, morphopen, st
         end
     end
     if sigonly
-        function get_pad(strel, Y, val)
-            if pad
-                padlo = tuple(-[first.(axes(strel))...]...)
-                padhi = last.(axes(strel))
-                Y_padded = padarray(view(Y,1,:,:), Fill(val, padlo, padhi))
-            else
-                padlo = padhi = [0,0]
-                Y_padded = Y[1,:,:]
-            end
-            return Y_padded, [1:1, 1+padlo[1]:size(Y,2)+padlo[1], 1+padlo[2]:size(Y,3)+padlo[2]]
-        end
         if morphclose
-            Y_padded, ipad = get_pad(strelclose, Y_overlay, 0)
+            Y_padded, ipad = get_pad(pad, strelclose, Y_overlay, 0)
             Y_closed = closing(Y_padded, strelclose)
             Y_overlay .= reshape(Y_closed, 1, size(Y_closed)...)[ipad...]
             Y_overlay[2,:,:] .= 0
             Y_overlay[4,:,:] .= 1
         end
         if morphopen
-            Y_padded, ipad = get_pad(strelopen, Y_overlay, 1)
+            Y_padded, ipad = get_pad(pad, strelopen, Y_overlay, 1)
             Y_opened = opening(Y_padded, strelopen)
             Y_overlay .= reshape(Y_opened, 1, size(Y_opened)...)[ipad...]
             Y_overlay[2,:,:] .= 0

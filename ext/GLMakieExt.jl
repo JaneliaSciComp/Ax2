@@ -22,6 +22,7 @@ end
     Ys; Y; Y_freq; Y_time; coarse2fine;
     ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
+    obs_hit; obs_miss; obs_fa;
     iclip_subsampled; y_clip; times_yclip;
     cumpowers1; cumpowers1_freqs; cumpowers2; times_cumpowers2;
 end
@@ -395,18 +396,15 @@ function init()
                               "freq = ", pos[2], " kHz\n",
                               "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
-    obs_hit_low = @lift ismissing($hits) ? [1] : $(hits)[:,1]
-    obs_hit_high = @lift ismissing($hits) ? [1] : $(hits)[:,2]
-    l_hit = vspan!(obs_hit_low, obs_hit_high, color = Cycled(2), alpha=0.5,
-                   visible=cb_mistakes.checked)
-    obs_miss_low = @lift ismissing($misses) ? [1] : $(misses)[:,1]
-    obs_miss_high = @lift ismissing($misses) ? [1] : $(misses)[:,2]
-    l_miss = vspan!(obs_miss_low, obs_miss_high, color = Cycled(3), alpha=0.5,
-                    visible=cb_mistakes.checked)
-    obs_fa_low = @lift ismissing($false_alarms) ? [1] : $(false_alarms)[:,1]
-    obs_fa_high = @lift ismissing($false_alarms) ? [1] : $(false_alarms)[:,2]
-    l_fa = vspan!(obs_fa_low, obs_fa_high, color = Cycled(4), alpha=0.5,
-                  visible=cb_mistakes.checked)
+    obs_hit = @lift ismissing($hits) ? Point2f[(0, 0)] :
+            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($hits)]
+    l_hit = poly!(obs_hit, color = Cycled(2), visible=cb_mistakes.checked)
+    obs_miss = @lift ismissing($misses) ? Point2f[(0, 0)] :
+            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($misses)]
+    l_miss = poly!(obs_miss, color = Cycled(3), visible=cb_mistakes.checked)
+    obs_fa = @lift ismissing($false_alarms) ? Point2f[(0, 0)] :
+            [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($false_alarms)]
+    l_fa = poly!(obs_fa, color = Cycled(4), visible=cb_mistakes.checked)
 
     iclip_subsampled = @lift $iclip[1] : max(1, fld($iclip[2]-$iclip[1], display_size[2])) : $iclip[2]
     y_clip = @lift view(y[], $iclip_subsampled)
@@ -567,6 +565,7 @@ function init()
         Ys, Y, Y_freq, Y_time, coarse2fine,
         ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,
+        obs_hit, obs_miss, obs_fa,
         iclip_subsampled, y_clip, times_yclip,
         cumpowers1, cumpowers1_freqs, cumpowers2, times_cumpowers2,
         )

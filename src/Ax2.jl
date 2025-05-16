@@ -124,13 +124,15 @@ end
 function refine_ftest(Fs, pval, sigonly, morphclose, strelclose, morphopen, strelopen,
                       minpix, pad=true)
     Y_overlay = overlay(Fs)
-    for j in axes(Y_overlay,2), k in axes(Y_overlay,3)
-        if all(x->x<pval, view(Y_overlay,1:3,j,k))
-            Y_overlay[:,j,k] .= 1
-            Y_overlay[2,j,k] = 0
-        elseif sigonly
-            Y_overlay[:,j,k] .= 0
-            Y_overlay[4,j,k] = 1
+    for j in axes(Y_overlay,2)
+        Threads.@threads for k in axes(Y_overlay,3)
+            if all(x->x<pval, view(Y_overlay,1:3,j,k))
+                Y_overlay[:,j,k] .= 1
+                Y_overlay[2,j,k] = 0
+            elseif sigonly
+                Y_overlay[:,j,k] .= 0
+                Y_overlay[4,j,k] = 1
+            end
         end
     end
     if sigonly

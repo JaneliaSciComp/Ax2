@@ -30,20 +30,22 @@ function overlay(Ys)
     for (icolor, Yi) in enumerate(Ys)
         sz = size(Yi)
         scale = round.(Int, (minfreq, mintime) ./ sz)
-        for f0 in 1:scale[1], t0 in 1:scale[2]
+        for f0 in 1:scale[1]
             fdelta = sz[1] - length(f0:scale[1]:minfreq)
-            tdelta = sz[2] - length(t0:scale[2]:mintime)
-            Y_overlay[icolor,
-              f0 : scale[1] : end,
-              t0 : scale[2] : end] .= Yi[1:end-fdelta, 1:end-tdelta]
+            for t0 in 1:scale[2]
+                tdelta = sz[2] - length(t0:scale[2]:mintime)
+                Y_overlay[icolor,
+                  f0 : scale[1] : end,
+                  t0 : scale[2] : end] .= @view Yi[1:end-fdelta, 1:end-tdelta]
+            end
         end
     end
     Y_overlay[4,:,:] .= 1
     if length(Ys) == 2
-        Y_overlay[3,:,:] .= Y_overlay[2,:,:]
-        Y_overlay[2,:,:] .= Y_overlay[1,:,:]
+        Y_overlay[3,:,:] .= @view Y_overlay[2,:,:]
+        Y_overlay[2,:,:] .= @view Y_overlay[1,:,:]
     elseif length(Ys) == 1
-        Y_overlay[2,:,:] .= Y_overlay[3,:,:] .= Y_overlay[1,:,:]
+        Y_overlay[2,:,:] .= Y_overlay[3,:,:] .= @view Y_overlay[1,:,:]
     end
     return Y_overlay
 end

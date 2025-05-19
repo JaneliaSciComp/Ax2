@@ -199,7 +199,7 @@ function play(y, iclip, fs)
 end
 
 function get_components(F, Y_freq, ifreq, Y_time, itime)
-    labels = label_components(view(F,ifreq,:), trues(3,3))
+    labels = label_components(view(F,ifreq,itime), trues(3,3))
     indices = component_indices(CartesianIndex, labels)
     data = Matrix{Float64}(undef, length(indices)-2, 4)
     for (i,idx) in Iterators.drop(enumerate(indices), 2)

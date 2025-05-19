@@ -18,7 +18,7 @@ end
 
 @kwdef struct Observables
     y; fs; hits; misses; false_alarms;
-    nffts; noverlaps; nw; k; pval; strelclose; strelopen; minpix;
+    nffts; noverlaps; offset; nw; k; pval; strelclose; strelopen; minpix;
     Ys; Y; Y_freq; Y_time; coarse2fine;
     ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
@@ -144,6 +144,7 @@ function init()
 
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
     noverlaps = @lift div.($nffts, 2)
+    offset = Observable(0)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
     k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
     pval = @lift parse(Float64, $(tb_pval.stored_string))
@@ -151,7 +152,7 @@ function init()
     strelopen = @lift make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
     minpix = @lift parse(Int, $(tb_minpix.stored_string))
 
-    Ys = @lift calculate_hanning_spectrograms($y, $nffts, $fs)
+    Ys = @lift calculate_hanning_spectrograms($y, $nffts, $noverlaps, $offset, $fs)
     Y = @lift overlay($Ys, dB)
 
     Y_freq = @lift freq($Ys[argmax($nffts)])
@@ -305,14 +306,14 @@ function init()
     end
 
     # indices into y
-    iclip = lift(itime) do itime
-        (round(Int, Y_time[][itime[1]]*fs[] - minimum(nffts[])/2 + 1),
-         round(Int, Y_time[][itime[end]]*fs[] + minimum(nffts[])/2))
+    iclip = @lift begin
+        (round(Int, Y_time[][$itime[1]]*fs[] - minimum(noverlaps[]) + 1 + $offset),
+         round(Int, Y_time[][$itime[end]]*fs[] + minimum(noverlaps[]) + $offset))
     end
 
     mtspectrums = @lift begin
         if !$(to_window.active) || $(cb_ftest.checked)
-            calculate_multitaper_spectrograms($y, $nffts, $nw, $k, $fs, $iclip)
+            calculate_multitaper_spectrograms($y, $nffts, $noverlaps, $nw, $k, $fs, $iclip)
         else
             fill(Vector{Periodograms.PeriodogramF}(undef, 0), 0)
         end
@@ -561,7 +562,7 @@ function init()
 
     observables = Observables(
         y, fs, hits, misses, false_alarms,
-        nffts, noverlaps, nw, k, pval, strelclose, strelopen, minpix,
+        nffts, noverlaps, offset, nw, k, pval, strelclose, strelopen, minpix,
         Ys, Y, Y_freq, Y_time, coarse2fine,
         ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,

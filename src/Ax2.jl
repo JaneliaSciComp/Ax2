@@ -10,12 +10,12 @@ fs_play = 48_000
 
 load_recording(wavfile) = wavread(wavfile)
 
-Ys_cache = LRU{Int,DSP.Periodograms.Spectrogram}(maxsize=10)
+Ys_cache = LRU{Tuple{Int,Int,Int},DSP.Periodograms.Spectrogram}(maxsize=10)
 
-function calculate_hanning_spectrograms(y, nffts, fs)
+function calculate_hanning_spectrograms(y, nffts, noverlaps, offset, fs)
     Ys = Vector{DSP.Periodograms.Spectrogram}(undef, length(nffts))
-    Threads.@threads :greedy for (i,nfft) in enumerate(nffts)
-        Ys[i] = get!(()->spectrogram.(Ref(y[:,1]), nfft; fs=fs, window=hanning), Ys_cache, nfft)
+    Threads.@threads :greedy for (i,(nfft,noverlap)) in enumerate(zip(nffts,noverlaps))
+        Ys[i] = get!(()->spectrogram.(Ref(y[1+offset:end,1]), nfft, noverlap; fs=fs, window=hanning), Ys_cache, (nfft,offset,noverlap))
     end
     return Ys
 end
@@ -59,7 +59,7 @@ function precompute_config(nfft, nw, k, fs)
     end
 end
 
-function calculate_multitaper_spectrograms(y, nffts, nw, k, fs, iclip)
+function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip)
     function _mt_pgram(idx, nfft, config)
         _y = y[idx:idx+nfft-1]
         _y .-= mean(_y)
@@ -67,9 +67,8 @@ function calculate_multitaper_spectrograms(y, nffts, nw, k, fs, iclip)
     end
 
     mtspectrums = []
-    for nfft in nffts
+    for (nfft,noverlap) in zip(nffts,noverlaps)
         haskey(configs, nfft) || precompute_config(nfft, nw, k, fs)
-        noverlap = div(nfft, 2)
         idxs = iclip[1] : nfft-noverlap : iclip[2]+1-nfft+1
         mtspectrum = Vector{Periodograms.PeriodogramF}(undef, length(idxs))
         i_idxs = Channel() do chnl

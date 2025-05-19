@@ -110,59 +110,72 @@ end
 
 make_strel(t) = strel_box(t)
 
-function get_pad(pad, strel, Y, val)
+function get_pad(pad, strel, F, val)
     if pad
         padlo = tuple(-[first.(axes(strel))...]...)
         padhi = last.(axes(strel))
-        Y_padded = padarray(view(Y,1,:,:), Fill(val, padlo, padhi))
+        F_padded = padarray(view(F,1,:,:), Fill(val, padlo, padhi))
     else
         padlo = padhi = (0,0)
-        Y_padded = Y[1,:,:]
+        F_padded = F[1,:,:]
     end
-    return Y_padded, [1:1, 1+padlo[1]:size(Y,2)+padlo[1], 1+padlo[2]:size(Y,3)+padlo[2]]
+    return F_padded, [1:1, 1+padlo[1]:size(F,2)+padlo[1], 1+padlo[2]:size(F,3)+padlo[2]]
 end
 
-function refine_ftest(Fs, pval, sigonly, morphclose, strelclose, morphopen, strelopen,
-                      minpix, pad=true)
-    Y_overlay = overlay(Fs)
-    for j in axes(Y_overlay,2)
-        Threads.@threads for k in axes(Y_overlay,3)
-            if all(x->x<pval, view(Y_overlay,1:3,j,k))
-                Y_overlay[:,j,k] .= 1
-                Y_overlay[2,j,k] = 0
+function refine_ftest(_Fs, minpix1, pval, anyall, sigonly,
+                      morphclose, strelclose, morphopen, strelopen,
+                      minpix2, pad=true)
+    if sigonly && minpix1>0
+        Fs = deepcopy(_Fs)
+        Threads.@threads for thisFs in Fs
+            labels = label_components(thisFs .< pval, trues(3,3))
+            indices = component_indices(labels)
+            for idx in Iterators.filter(x->length(x) < minpix1, Iterators.drop(indices, 1))
+                thisFs[idx] .= 1
+            end
+        end
+    else
+        Fs = _Fs
+    end
+    F_overlay = overlay(Fs)
+    for j in axes(F_overlay,2)
+        Threads.@threads for k in axes(F_overlay,3)
+            if anyall(x->x<pval, view(F_overlay,1:3,j,k))
+                F_overlay[:,j,k] .= 1
+                F_overlay[2,j,k] = 0
             elseif sigonly
-                Y_overlay[:,j,k] .= 0
-                Y_overlay[4,j,k] = 1
+                F_overlay[:,j,k] .= 0
+                F_overlay[4,j,k] = 1
             end
         end
     end
     if sigonly
         if morphclose
-            Y_padded, ipad = get_pad(pad, strelclose, Y_overlay, 0)
-            Y_closed = closing(Y_padded, strelclose)
-            Y_overlay .= reshape(Y_closed, 1, size(Y_closed)...)[ipad...]
-            Y_overlay[2,:,:] .= 0
-            Y_overlay[4,:,:] .= 1
+            F_padded, ipad = get_pad(pad, strelclose, F_overlay, 0)
+            F_closed = closing(F_padded, strelclose)
+            F_overlay .= reshape(F_closed, 1, size(F_closed)...)[ipad...]
+            F_overlay[2,:,:] .= 0
+            F_overlay[4,:,:] .= 1
         end
         if morphopen
-            Y_padded, ipad = get_pad(pad, strelopen, Y_overlay, 1)
-            Y_opened = opening(Y_padded, strelopen)
-            Y_overlay .= reshape(Y_opened, 1, size(Y_opened)...)[ipad...]
-            Y_overlay[2,:,:] .= 0
-            Y_overlay[4,:,:] .= 1
+            F_padded, ipad = get_pad(pad, strelopen, F_overlay, 1)
+            F_opened = opening(F_padded, strelopen)
+            F_overlay .= reshape(F_opened, 1, size(F_opened)...)[ipad...]
+            F_overlay[2,:,:] .= 0
+            F_overlay[4,:,:] .= 1
         end
-        if minpix>0
-            labels = label_components(Y_overlay[1,:,:], trues(3,3))
+        if minpix2>0
+            labels = label_components(F_overlay[1,:,:], trues(3,3))
             indices = component_indices(labels)
-            for idx in Iterators.filter(x->length(x) < minpix, Iterators.drop(indices, 1))
-                view(Y_overlay, 1,:,:)[idx] .= 0
-                view(Y_overlay, 2,:,:)[idx] .= 0
-                view(Y_overlay, 3,:,:)[idx] .= 0
+            for idx in Iterators.filter(x->length(x) < minpix2, Iterators.drop(indices, 1))
+                view(F_overlay, 1,:,:)[idx] .= 0
+                view(F_overlay, 2,:,:)[idx] .= 0
+                view(F_overlay, 3,:,:)[idx] .= 0
             end
         end
     end
-    Y_converted = N0f8.(Y_overlay)
-    dropdims(collect(reinterpret(RGBA{N0f8}, Y_converted)), dims=1)
+    F_converted = N0f8.(F_overlay)
+    dropdims(collect(reinterpret(RGBA{N0f8}, F_converted)), dims=1)
 end
 
 function scale_and_color(Y_overlay)

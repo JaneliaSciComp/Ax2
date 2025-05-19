@@ -6,8 +6,8 @@ include("block-tooltips.jl")
 
 @kwdef struct Widgets
     fig; me_wav; me_jump; cb_mistakes;
-    cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_pval; cb_sigonly;
-    cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix;
+    cb_power; to_window; tb_nfft; cb_ftest; tb_nwk; tb_minpix1; tb_pval; to_anyall; cb_sigonly;
+    cb_morphclose; tb_strelclose; cb_morphopen; tb_strelopen; tb_minpix2;
     isl_freq;
     bt_left_big_center; bt_left_small_center; bt_right_small_center; bt_right_big_center;
     bt_left_big_width; bt_left_small_width; bt_right_small_width; bt_right_big_width;
@@ -18,7 +18,7 @@ end
 
 @kwdef struct Observables
     y; fs; hits; misses; false_alarms;
-    nffts; noverlaps; offset; nw; k; pval; strelclose; strelopen; minpix;
+    nffts; noverlaps; offset; nw; k; minpix1; pval; strelclose; strelopen; minpix2;
     Ys; Y; Y_freq; Y_time; coarse2fine;
     ifreq; itime; iclip; mtspectrums; Y_MTs; Y_MT; Fs; F;
     alpha_power; alpha_pval; powers; freqs; times; freqs_mt; times_mt; pvals; cr;
@@ -45,13 +45,15 @@ pref_defaults = (;
     tb_nfft = "512",
     cb_ftest = false,
     tb_nwk = "4,6",
+    tb_minpix1 = "0",
     tb_pval = "0.01",
+    to_anyall = true,
     cb_sigonly = false,
     cb_morphclose = false,
     cb_morphopen = false,
     tb_strelclose = "3x9",
     tb_strelopen = "3x9",
-    tb_minpix = "0",
+    tb_minpix2 = "0",
     )
 
 function init()
@@ -70,13 +72,15 @@ function init()
     tb_nfft_pref = @load_preference("tb_nfft", pref_defaults.tb_nfft)
     cb_ftest_pref = @load_preference("cb_ftest", pref_defaults.cb_ftest)
     tb_nwk_pref = @load_preference("tb_nwk", pref_defaults.tb_nwk)
+    tb_minpix1_pref = @load_preference("tb_minpix1", pref_defaults.tb_minpix1)
     tb_pval_pref = @load_preference("tb_pval", pref_defaults.tb_pval)
+    to_anyall_pref = @load_preference("to_anyall", pref_defaults.to_anyall)
     cb_sigonly_pref = @load_preference("cb_sigonly", pref_defaults.cb_sigonly)
     cb_morphclose_pref = @load_preference("cb_morphclose", pref_defaults.cb_morphclose)
     tb_strelclose_pref = @load_preference("tb_strelclose", pref_defaults.tb_strelclose)
     cb_morphopen_pref = @load_preference("cb_morphopen", pref_defaults.cb_morphopen)
     tb_strelopen_pref = @load_preference("tb_strelopen", pref_defaults.tb_strelopen)
-    tb_minpix_pref = @load_preference("tb_minpix", pref_defaults.tb_minpix)
+    tb_minpix2_pref = @load_preference("tb_minpix2", pref_defaults.tb_minpix2)
 
     fig = Figure(size=figsize_pref)
 
@@ -121,10 +125,17 @@ function init()
     Label(gl_fft[5,1,Top()], "NW,K")
     tb_nwk = Textbox(gl_fft[5,1], stored_string=tb_nwk_pref,
                      validator = s -> all(isdigit(c) || in(c,".,") for c in s))
-    Label(gl_fft[6,1,Top()], "p-val")
-    tb_pval = Textbox(gl_fft[6,1], stored_string=tb_pval_pref, validator=Float64)
-    Label(gl_fft[7,1, Top()], "sig. only")
-    cb_sigonly = Checkbox(gl_fft[7,1], checked = cb_sigonly_pref)
+    Label(gl_fft[6,1, Top()], "min. pix")
+    tb_minpix1 = Textbox(gl_fft[6,1], stored_string=tb_minpix1_pref,
+                        validator = s -> all(isdigit(c) for c in s))
+
+    Label(gl_fft[7,1,Top()], "p-val")
+    tb_pval = Textbox(gl_fft[7,1], stored_string=tb_pval_pref, validator=Float64)
+    Label(gl_fft[8,1, Top()], "all")
+    Label(gl_fft[8,1, Bottom()], "any")
+    to_anyall = Toggle(gl_fft[8,1], active=to_anyall_pref, orientation=:vertical)
+    Label(gl_fft[9,1, Top()], "sig. only")
+    cb_sigonly = Checkbox(gl_fft[9,1], checked = cb_sigonly_pref)
 
     gl_morph = GridLayout(fig[1:3,5])
     Label(gl_morph[1,1, Top()], "morph.\nclose")
@@ -139,7 +150,7 @@ function init()
                            validator = s -> all(isdigit(c) || c=='x' for c in s))
 
     Label(gl_morph[5,1, Top()], "min. pix")
-    tb_minpix = Textbox(gl_morph[5,1], stored_string=tb_minpix_pref,
+    tb_minpix2 = Textbox(gl_morph[5,1], stored_string=tb_minpix2_pref,
                         validator = s -> all(isdigit(c) for c in s))
 
     nffts = @lift parse.(Int, split($(tb_nfft.stored_string), ','))
@@ -147,10 +158,11 @@ function init()
     offset = Observable(0)
     nw = @lift parse(Float64, split($(tb_nwk.stored_string), ',')[1])
     k = @lift parse(Int, split($(tb_nwk.stored_string), ',')[2])
+    minpix1 = @lift parse(Int, $(tb_minpix1.stored_string))
     pval = @lift parse(Float64, $(tb_pval.stored_string))
     strelclose = @lift make_strel(tuple(parse.(Int, split($(tb_strelclose.stored_string), 'x'))...))
     strelopen = @lift make_strel(tuple(parse.(Int, split($(tb_strelopen.stored_string), 'x'))...))
-    minpix = @lift parse(Int, $(tb_minpix.stored_string))
+    minpix2 = @lift parse(Int, $(tb_minpix2.stored_string))
 
     Ys = @lift calculate_hanning_spectrograms($y, $nffts, $noverlaps, $offset, $fs)
     Y = @lift overlay($Ys, dB)
@@ -337,10 +349,11 @@ function init()
     end
     F = @lift begin
         if $(cb_ftest.checked)
-            refine_ftest($Fs, $pval, $(cb_sigonly.checked),
+            anyall = $(to_anyall.active) ? all : any
+            refine_ftest($Fs, $minpix1, $pval, anyall, $(cb_sigonly.checked),
                            $(cb_morphclose.checked), $strelclose,
                            $(cb_morphopen.checked), $strelopen,
-                           $minpix)
+                           $minpix2)
         else
             Matrix{RGBA{N0f8}}(undef, 0, 0)
         end
@@ -469,7 +482,11 @@ function init()
              K should be less than 2NW-1
              """,
              placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(tb_minpix1, "cull connected components with fewer than this many pixels before merging across nffts",
+             placement = :left, enabled = cb_tooltips.checked)
     tooltip!(tb_pval, "the threshold at which to consider the F-test significant",
+             placement = :left, enabled = cb_tooltips.checked)
+    tooltip!(to_anyall, "significant pixels pass all or any F-tests",
              placement = :left, enabled = cb_tooltips.checked)
     tooltip!(cb_sigonly, "display the insignificant pixels in all black",
              placement = :left, enabled = cb_tooltips.checked)
@@ -482,7 +499,7 @@ function init()
              placement = :left, enabled = cb_tooltips.checked)
     tooltip!(tb_strelclose, "the height and width of the closing structuring element",
              placement = :left, enabled = cb_tooltips.checked)
-    tooltip!(tb_minpix, "cull connected components with fewer than this many pixels",
+    tooltip!(tb_minpix2, "cull connected components with fewer than this many pixels after merging across nffts",
              placement = :left, enabled = cb_tooltips.checked)
 
     tooltip!(isl_freq, "zoom in on the frequency axis",
@@ -540,18 +557,20 @@ function init()
     on(x->@set_preferences!("tb_nfft"=>x), tb_nfft.stored_string)
     on(x->@set_preferences!("cb_ftest"=>x), cb_ftest.checked)
     on(x->@set_preferences!("tb_nwk"=>x), tb_nwk.stored_string)
+    on(x->@set_preferences!("tb_minpix1"=>x), tb_minpix1.stored_string)
     on(x->@set_preferences!("tb_pval"=>x), tb_pval.stored_string)
+    on(x->@set_preferences!("to_anyall"=>x), to_anyall.active)
     on(x->@set_preferences!("cb_sigonly"=>x), cb_sigonly.checked)
     on(x->@set_preferences!("cb_morphclose"=>x), cb_morphclose.checked)
     on(x->@set_preferences!("tb_strelclose"=>x), tb_strelclose.stored_string)
     on(x->@set_preferences!("cb_morphopen"=>x), cb_morphopen.checked)
     on(x->@set_preferences!("tb_strelopen"=>x), tb_strelopen.stored_string)
-    on(x->@set_preferences!("tb_minpix"=>x), tb_minpix.stored_string)
+    on(x->@set_preferences!("tb_minpix2"=>x), tb_minpix2.stored_string)
 
     widgets = Widgets(
         fig, me_wav, me_jump, cb_mistakes,
-        cb_power, to_window, tb_nfft, cb_ftest, tb_nwk, tb_pval, cb_sigonly,
-        cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix,
+        cb_power, to_window, tb_nfft, cb_ftest, tb_nwk, tb_minpix1, tb_pval, to_anyall, cb_sigonly,
+        cb_morphclose, tb_strelclose, cb_morphopen, tb_strelopen, tb_minpix2,
         isl_freq,
         bt_left_big_center, bt_left_small_center, bt_right_small_center, bt_right_big_center,
         bt_left_big_width, bt_left_small_width, bt_right_small_width, bt_right_big_width,
@@ -562,7 +581,7 @@ function init()
 
     observables = Observables(
         y, fs, hits, misses, false_alarms,
-        nffts, noverlaps, offset, nw, k, pval, strelclose, strelopen, minpix,
+        nffts, noverlaps, offset, nw, k, minpix1, pval, strelclose, strelopen, minpix2,
         Ys, Y, Y_freq, Y_time, coarse2fine,
         ifreq, itime, iclip, mtspectrums, Y_MTs, Y_MT, Fs, F,
         alpha_power, alpha_pval, powers, freqs, times, freqs_mt, times_mt, pvals, cr,

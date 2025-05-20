@@ -410,13 +410,13 @@ function init()
                               "freq = ", pos[2], " kHz\n",
                               "power = ", red(pos[3]).i+0, ',', green(pos[3]).i+0, ',', blue(pos[3]).i+0))
 
-    obs_hit = @lift ismissing($hits) ? Point2f[(0, 0)] :
+    obs_hit = @lift ismissing($hits) || isempty($hits) ? Point2f[(0, 0)] :
             [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($hits)]
     l_hit = poly!(obs_hit, color = Cycled(2), visible=cb_mistakes.checked)
-    obs_miss = @lift ismissing($misses) ? Point2f[(0, 0)] :
+    obs_miss = @lift ismissing($misses) || isempty($misses) ? Point2f[(0, 0)] :
             [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($misses)]
     l_miss = poly!(obs_miss, color = Cycled(3), visible=cb_mistakes.checked)
-    obs_fa = @lift ismissing($false_alarms) ? Point2f[(0, 0)] :
+    obs_fa = @lift ismissing($false_alarms) || isempty($false_alarms) ? Point2f[(0, 0)] :
             [Rect(r[1], r[3]./hz2khz, r[2]-r[1], (r[4]-r[3])./hz2khz) for r in eachrow($false_alarms)]
     l_fa = poly!(obs_fa, color = Cycled(4), visible=cb_mistakes.checked)
 

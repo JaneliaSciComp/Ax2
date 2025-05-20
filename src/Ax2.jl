@@ -59,7 +59,7 @@ function precompute_config(nfft, nw, k, fs)
     end
 end
 
-function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip)
+function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip, output=stderr)
     function _mt_pgram(idx, nfft, config)
         _y = y[idx:idx+nfft-1]
         _y .-= mean(_y)
@@ -74,7 +74,7 @@ function calculate_multitaper_spectrograms(y, nffts, noverlaps, nw, k, fs, iclip
         i_idxs = Channel() do chnl
             foreach(i_idx->put!(chnl,i_idx), enumerate(idxs))
         end
-        p = Progress(length(idxs))
+        p = Progress(length(idxs), output=output)
         @sync for _ in 1:Threads.nthreads()
             Threads.@spawn begin
                 config = take!(configs[nfft])
